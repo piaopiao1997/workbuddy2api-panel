@@ -201,6 +201,7 @@ func main() {
 	up.GlobalEnabled = cfg.Global.Enabled
 	up.ChatBaseGlobal = cfg.Global.ChatBase
 	up.BillingBaseGlobal = cfg.Global.BillingBase
+	applyCNChatBase(up, cfg)
 	auth.SetGlobalEnabled(cfg.Global.Enabled)
 	// model.json 本地缓存接线（context_length/max_output_tokens 四级查找链第 3 级）：
 	// 数据目录与 state.json 同风格（Docker volume 持久化路径）。首次缺失/损坏自动
@@ -726,6 +727,14 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	return restartRequiredFields(baseline, newCfg), nil
 }
 
+// applyCNChatBase 把 config cn.chat_base 装配进上游 client；空则保留内置默认，
+// 老配置（无 cn 段）行为不变。
+func applyCNChatBase(up *upstream.Client, cfg *Config) {
+	if cfg.CN.ChatBase != "" {
+		up.ChatBaseCN = cfg.CN.ChatBase
+	}
+}
+
 // restartRequiredFields 比较运行中装配值与新配置（有运行配置时以它为准，否则退化
 // 为磁盘旧值），只报告「确实变化且无法热生效」的字段——第二次保存不再重复携带上
 // 一处的待重启项、改回原值即自动清除（无独立的 pending 集合）。移植上游 PR #104；
@@ -750,6 +759,8 @@ func restartRequiredFields(current, next *Config) []string {
 	changed("upstream.device_token", current.Upstream.DeviceToken, next.Upstream.DeviceToken)
 	changed("upstream.device_token_file", current.Upstream.DeviceTokenFile, next.Upstream.DeviceTokenFile)
 	changed("upstream.passthrough_ip", current.Upstream.PassthroughIP, next.Upstream.PassthroughIP)
+	// cn.chat_base 同样只在装配期写进 up.ChatBaseCN（请求路径并发读取，不做热改）。
+	changed("cn.chat_base", current.CN.ChatBase, next.CN.ChatBase)
 	changed("global.enabled", current.Global.Enabled, next.Global.Enabled)
 	changed("global.chat_base", current.Global.ChatBase, next.Global.ChatBase)
 	changed("global.billing_base", current.Global.BillingBase, next.Global.BillingBase)
