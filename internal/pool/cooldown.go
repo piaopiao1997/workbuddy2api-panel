@@ -330,10 +330,9 @@ func (p *Pool) BlockModelBackoff(uid, model, reason string) {
 	p.dirty.Store(true)
 }
 
-// BlockModelClear 清除 (账号, 模型) 的 11102 负缓存条目（该模型实测又通了）。半开探测
-// 或正常请求对该模型成功后调用（handler 成功路径）。只清 11102 条目、不碰 6004 独立
-// 冷却表——6004 有自身上游重置墙钟语义，成功不该抹掉。reason 前缀判定区分两者：
-// 11102 条目的 reason 恒以 "11102" 开头（见 upstream.BlockModelReason）。
+// BlockModelClear 清除 (账号, 模型) 的确定性模型拒绝负缓存（11102/11158；该模型
+// 实测又通了）。半开探测或正常请求对该模型成功后调用（handler 成功路径）。只清
+// 这两类条目、不碰 6004 独立冷却表——6004 有自身上游重置墙钟语义，成功不该抹掉。
 func (p *Pool) BlockModelClear(uid, model string) {
 	if uid == "" || model == "" {
 		return
@@ -345,7 +344,7 @@ func (p *Pool) BlockModelClear(uid, model string) {
 		return
 	}
 	mc, exists := e.modelCooldowns[model]
-	if !exists || !strings.HasPrefix(mc.Reason, "11102") {
+	if !exists || (!strings.HasPrefix(mc.Reason, "11102") && !strings.HasPrefix(mc.Reason, "11158")) {
 		return
 	}
 	delete(e.modelCooldowns, model)
@@ -378,6 +377,13 @@ type ModelBlockStatus struct {
 // 口径必须与选号一致：用 modelCooled 而非直接查 map，这样 AuditOnly 条目
 // （只审计不拦截）不会被误报成阻塞。
 func (p *Pool) ModelBlocked(model string) ModelBlockStatus {
+	return p.ModelBlockedForRealm(model, "")
+}
+
+// ModelBlockedForRealm 与 ModelBlocked 同口径，但只统计指定 realm 的可选账号。
+// 模型请求已按 realm 分池时（如 global:gpt-5.6-sol 只走 global 账号），另一域的
+// 未冷却账号不构成“还能服务”的证明，否则会把本域全锁误报成 no_healthy_account。
+func (p *Pool) ModelBlockedForRealm(model, realm string) ModelBlockStatus {
 	if model == "" {
 		return ModelBlockStatus{}
 	}
@@ -387,8 +393,15 @@ func (p *Pool) ModelBlocked(model string) ModelBlockStatus {
 
 	var st ModelBlockStatus
 	for _, e := range p.byUID {
-		if e.disabled {
-			continue // 禁用号不参与：它的不可用与模型无关
+		// 命中 realm 之外的账号、以及禁用/暂停号，都不构成「还能服务」的证明：
+		// realm 分池后另一域的健康号掩盖不了本域全锁。
+		if realm != "" && e.a.Realm() != realm {
+			continue
+		}
+		// 暂停选号（paused）号与禁用号同口径跳过：它此刻不可选，「能服务」的
+		// 证明不成立——否则一个暂停的健康号会掩盖「其余号全被模型级冷却挡住」。
+		if e.disabled || e.paused {
+			continue // 禁用/暂停号不参与：它们的不可用与模型无关
 		}
 		if !e.modelCooled(now, model) {
 			// 还有账号能服务这个模型 → 不是模型级阻塞。

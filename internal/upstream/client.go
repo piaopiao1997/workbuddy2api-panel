@@ -262,6 +262,16 @@ func IsModelRateLimit(body string) bool {
 // modelBlockCode 明确指向「该后端无此模型」的业务 code。
 const modelBlockCode = "11102"
 
+// modelForbiddenCode 明确指向「该账号类型无权使用该模型」的业务 code（上游 PR #221）。
+// 同一模型在不同账号类型上权限不同，因此与 11102 同属 (账号, 模型) 级负缓存：
+// 换有权限的账号仍可能成功，全部账号都拒绝时再向客户端报模型不可用。
+const modelForbiddenCode = "11158"
+
+const modelForbiddenMsgMarker = "is not allowed for user type"
+
+// ModelForbiddenReason 11158 负缓存条目的 reason 前缀（与 11102 分开，便于区分原因）。
+const ModelForbiddenReason = "11158 model not allowed for account type"
+
 // modelBlockMsgMarkers 11102/14401 答复的确定性文案（官方 error message 固定短语）。
 // 14401「route config not found」是图像模型的同族答复：该模型在本域没有路由，
 // 与 11102「该后端无此模型」一样，换号与重试都不可能成功。
@@ -287,18 +297,29 @@ func IsModelBlocked(status int, body string) bool {
 	}
 	// 轻量预检：body 既无 "11102" 又无 marker 时直接短路（大多数 4xx 零分配返回）。
 	lower := strings.ToLower(body)
-	if !strings.Contains(body, modelBlockCode) && !containsAnyMarker(lower, modelBlockMsgMarkers) {
+	if !strings.Contains(body, modelBlockCode) && !strings.Contains(body, modelForbiddenCode) &&
+		!containsAnyMarker(lower, modelBlockMsgMarkers) && !strings.Contains(lower, modelForbiddenMsgMarker) {
 		return false
 	}
+	code, msg := modelBlockFields(body)
+	if code == modelBlockCode || code == modelForbiddenCode {
+		return true
+	}
+	lowerMsg := strings.ToLower(msg)
+	return containsAnyMarker(lowerMsg, modelBlockMsgMarkers) ||
+		strings.Contains(lowerMsg, modelForbiddenMsgMarker)
+}
+
+// modelBlockFields 提取顶层或 error 子对象中的业务 code 与消息。
+func modelBlockFields(body string) (code, msg string) {
 	var root map[string]any
 	if err := json.Unmarshal([]byte(body), &root); err != nil {
-		return false
+		return "", ""
 	}
 	nodes := []map[string]any{root}
 	if inner, ok := root["error"].(map[string]any); ok {
 		nodes = append(nodes, inner)
 	}
-	code, msg := "", ""
 	for _, node := range nodes {
 		for _, key := range []string{"code", "errCode", "error_code"} {
 			if v, ok := node[key]; ok && v != nil && code == "" {
@@ -311,10 +332,17 @@ func IsModelBlocked(status int, body string) bool {
 			}
 		}
 	}
-	if code == modelBlockCode {
-		return true
+	return code, msg
+}
+
+// ModelBlockReasonFor 返回确定性模型拒绝对应的负缓存 reason（上游 PR #221）。
+// 11158 是账号类型权限问题；其余已由 IsModelBlocked 确认的形态沿用 11102。
+func ModelBlockReasonFor(body string) string {
+	code, msg := modelBlockFields(body)
+	if code == modelForbiddenCode || strings.Contains(strings.ToLower(msg), modelForbiddenMsgMarker) {
+		return ModelForbiddenReason
 	}
-	return containsAnyMarker(strings.ToLower(msg), modelBlockMsgMarkers)
+	return ModelBlockReason
 }
 
 // containsAnyMarker 任一短语命中即真（文案判定统一走这里，避免各处各写一遍循环）。
