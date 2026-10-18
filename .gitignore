@@ -46,3 +46,15 @@ docs/
 /cmd/desktopverify*/
 *.zip
 server.exe
+
+# Deployment backups and packet captures must never enter the public fork
+/config.json.*
+*.bak
+*.bak-*
+*.bak.*
+*.tar.gz
+*.tgz
+*.pcap
+*.pcapng
+*.sql
+*.sql.gz
