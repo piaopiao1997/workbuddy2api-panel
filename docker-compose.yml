@@ -1,32 +1,24 @@
 services:
   wb2api:
     build: .
+    # ★ 部署事实（当前镜像 tag）放 .env，不进仓库：升级只改 .env 一行
+    image: workbuddy2api-panel-wb2api:${WB2API_TAG:?WB2API_TAG 未设置（见 .env）}
     container_name: workbuddy2api
     restart: unless-stopped
-    # 容器默认以 app 用户（uid 10001）运行；本机把它改成 1000 是为了让
-    # ./auths、./data（属主 ubuntu=1000）可写。副作用见下面的 entrypoint 注释。
+    # 容器默认以 app 用户（uid 10001）运行；改成 1000 是为了让数据目录（属主 ubuntu=1000）可写。
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       - TZ=Asia/Shanghai
     ports:
       - "127.0.0.1:7863:7863"
-    # 面板「保存设置」= 先写 config.json.tmp 再 rename（同目录，要求该目录可写）。
-    # /app 是镜像层、属主 app(10001)，而容器以 PUID=1000 运行 → /app 不可写，
-    # 会报 "write config: open /app/config.json.tmp: permission denied"（2026-10-07 实测）。
-    # 解法：把 config.json 挂到可写的 ./data 里，tmp 与 rename 都落在这个目录内。
-    # ⚠️ 上游 ENTRYPOINT 写死 -config /app/config.json，故这里必须显式覆盖 entrypoint；
-    #    升级后请核对 Dockerfile 的 ENTRYPOINT 是否新增了别的参数。
-    # ⚠️ /app/data 本身是 bind mount，Docker 为这个挂载点会在宿主 ./data 下建占位文件
-    #    （0 字节、root 属主、每次重建都生成）。故预先做硬链接：
-    #        ln config.json data/config.json
-    #    两处是同一个 inode —— 既不被 Docker 覆盖，也不会出现"空配置"的假象。
-    #    若 data/config.json 丢了，重建前补一句上面的 ln 即可（补不补都能跑，
-    #    但补上更安全：万一将来去掉这个挂载，也不会读到 0 字节配置）。
+    # 上游 ENTRYPOINT 写死 -config /app/config.json，这里覆盖成 /app/data/config.json
+    # （面板「保存设置」要在同目录写 tmp 再 rename，/app 是镜像层不可写）。
     entrypoint: ["/app/wb2api", "-config", "/app/data/config.json"]
     volumes:
-      - ./auths:/app/auths
-      - ./data:/app/data
-      - ./config.json:/app/data/config.json
+      # ★ 数据目录（10-19 由 workbuddy2api-panel 改名而来），auths / state.json 连续；回滚读同一份
+      - ${WB2API_DATA:?WB2API_DATA 未设置（见 .env）}/auths:/app/auths
+      - ${WB2API_DATA:?WB2API_DATA 未设置（见 .env）}/data:/app/data
+      - ${WB2API_DATA:?WB2API_DATA 未设置（见 .env）}/config.json:/app/data/config.json
     networks:
       - 1panel-network
 
