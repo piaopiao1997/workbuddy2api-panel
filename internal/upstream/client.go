@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 )
 
@@ -1164,7 +1165,9 @@ func (c *Client) refresh(a *auth.Auth, within time.Duration, force bool) error {
 // doRefresh 只做网络刷新，不写回。调用方已保证同一 RT 只有它一个 leader。
 func (c *Client) doRefresh(a *auth.Auth, rtSnapshot string) *refreshResult {
 	endpoint := c.chatBase(a) + "/v2/plugin/auth/token/refresh"
-	ctx, cancel := context.WithTimeout(context.Background(), refreshIOTimeout)
+	// 同样绑 uid：同一账号的刷新请求也应从该账号固定的出口发出，
+	// 避免「登录地漂移」被上游当成异常（proxypool per_account 模式）。
+	ctx, cancel := context.WithTimeout(proxypool.WithUID(context.Background(), a.UID), refreshIOTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
@@ -1321,7 +1324,11 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 		c.ChatHeaders(req, a, clientIP, meta)
 		// 从调用方 ctx 派生：保留取消传播（父 ctx 取消 → 本 ctx 取消），
 		// 同时 monitorBody.Close 仍能独立 cancel 本分支（空闲掐流）。
-		reqCtx, cancel := context.WithCancel(ctx)
+		//
+		// 顺带把账号 uid 绑进 ctx：出站 Transport 的 Proxy 回调拿不到 *auth.Auth，
+		// 只能从 ctx 取 uid 来决定这个账号该走哪个代理出口（proxypool per_account
+		// 模式）。不绑 uid 时代理池退化为轮询，账号 IP 会跳变。
+		reqCtx, cancel := context.WithCancel(proxypool.WithUID(ctx, a.UID))
 		req = req.WithContext(reqCtx)
 		doStart := time.Now()
 		resp, err := c.chatHTTP().Do(req)

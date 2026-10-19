@@ -158,6 +158,10 @@ type Config struct {
 		DeviceTokenFile string `json:"device_token_file"`
 		// PassthroughIP 是否透传客户端 IP 给上游（默认 false，反代安全边界）。
 		PassthroughIP bool `json:"passthrough_ip"`
+		// Proxies 出站代理池列表（支持 http/https/socks5/socks5h，如 socks5://user:pass@host:port）。
+		Proxies []string `json:"proxies"`
+		// ProxyMode 代理模式：off（默认直连）/ per_account（单号单代理，推荐）/ round_robin（轮询）。
+		ProxyMode string `json:"proxy_mode"`
 	} `json:"upstream"`
 
 	Features struct {
@@ -495,6 +499,20 @@ func applyEnv(c *Config) {
 			c.Upstream.PassthroughIP = b
 		}
 	}
+	if v := os.Getenv("WB2A_PROXY_MODE"); v != "" {
+		c.Upstream.ProxyMode = v
+	}
+	if v := os.Getenv("WB2A_PROXIES"); v != "" {
+		var list []string
+		for _, s := range strings.Split(v, ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				list = append(list, s)
+			}
+		}
+		if len(list) > 0 {
+			c.Upstream.Proxies = list
+		}
+	}
 	if v := os.Getenv("WB2A_SANITIZE_FINGERPRINTS"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.Features.SanitizeBlacklistFingerprints = b
@@ -567,6 +585,8 @@ func (c *Config) EnvironmentManagedFields() []string {
 		{"WB2A_CLIENT_VERSION", "upstream.client_version", ""}, {"WB2A_CLI_VERSION", "upstream.cli_version", ""},
 		{"WB2A_CLIENT_NAME", "upstream.client_name", ""}, {"WB2A_DEVICE_TOKEN", "upstream.device_token", ""},
 		{"WB2A_DEVICE_TOKEN_FILE", "upstream.device_token_file", ""}, {"WB2A_PASSTHROUGH_IP", "upstream.passthrough_ip", "bool"},
+		{"WB2A_PROXY_MODE", "upstream.proxy_mode", ""},
+		{"WB2A_PROXIES", "upstream.proxies", ""},
 		{"WB2A_SANITIZE_FINGERPRINTS", "features.sanitize_blacklist_fingerprints", "bool"},
 		{"WB2A_PROMPT_MODE", "prompt.mode", ""}, {"WB2A_PROMPT_FILE", "prompt.file", ""},
 		{"WB2A_EXPIRING_SOON", "pool.expiring_soon", ""}, {"WB2A_PREFER_EXPIRING", "pool.prefer_expiring", "bool"},
@@ -730,6 +750,16 @@ func (c *Config) normalize() error {
 	// 任务书约定：0 一律视为"未设置"走默认，真正的"禁用"留待后续（避免歧义）。
 	if c.Upstream.HeaderTimeoutSeconds <= 0 {
 		c.Upstream.HeaderTimeoutSeconds = c.Upstream.TimeoutSeconds
+	}
+	m := strings.TrimSpace(strings.ToLower(c.Upstream.ProxyMode))
+	if m == "" {
+		if len(c.Upstream.Proxies) > 0 {
+			c.Upstream.ProxyMode = "per_account"
+		} else {
+			c.Upstream.ProxyMode = "off"
+		}
+	} else {
+		c.Upstream.ProxyMode = m
 	}
 	if c.Upstream.IdleTimeoutSeconds <= 0 {
 		c.Upstream.IdleTimeoutSeconds = 300

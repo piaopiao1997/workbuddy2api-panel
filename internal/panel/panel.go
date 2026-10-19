@@ -28,6 +28,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -221,6 +222,9 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
+	p.mux.HandleFunc("GET /panel/api/proxies", p.withAuth(p.proxiesHandler))
+	p.mux.HandleFunc("POST /panel/api/proxies/reset_dead", p.withAuth(p.proxiesResetDead))
+	p.mux.HandleFunc("POST /panel/api/proxies/reset_assign", p.withAuth(p.proxiesResetAssign))
 }
 
 // ServeHTTP 统一入口：先写安全响应头再分发，保证页面、静态资源、API
@@ -305,6 +309,8 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
 		"balance_refresh_sec":  p.balanceRefreshSec(),
 		"balance_refreshed_at": p.balanceRefreshedAt(),
+		"proxies_mode":         proxypool.Default().Mode(),
+		"proxies_count":        proxypool.Default().Len(),
 	})
 }
 
