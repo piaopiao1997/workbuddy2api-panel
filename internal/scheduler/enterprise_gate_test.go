@@ -303,3 +303,90 @@ func TestCheckinFailsOpenWhenStatusQueryFails(t *testing.T) {
 		t.Errorf("状态查询失败必须照常签到（fail-open）：%v", r.snapshot())
 	}
 }
+
+// apiKeyTestScheduler 与 enterpriseTestScheduler 同构，只是账号换成静态 API Key：
+// 用来验证「静态 Key 也进同一个门控」。两者共用 recorderUpstream，故门控行为
+// ——「一个上游调用都不发」——用同一套判据断言。
+func apiKeyTestScheduler(t *testing.T) (*Scheduler, *recorderUpstream) {
+	t.Helper()
+	r := &recorderUpstream{}
+	srv := r.server()
+	t.Cleanup(srv.Close)
+
+	// 静态 Key：无 refreshToken、无 expiresAt、无 enterpriseId——三者缺一都说明
+	// 它是个「不能刷新、不会过期、没有企业身份」的凭证形态。
+	a := &auth.Auth{UID: "k1", AccessToken: "ck_abc123.secret"}
+	p := pool.New("")
+	p.Add(a)
+
+	up := &upstream.Client{
+		HTTP:          srv.Client(),
+		ChatBaseCN:    srv.URL,
+		BillingBaseCN: srv.URL,
+		WebBaseCN:     srv.URL,
+	}
+	return New(Config{Pool: p, Upstream: up}), r
+}
+
+// TestAPIKeyGateSkipsGrowthTasks 静态 API Key 没有任何个人账号身份，五类成长任务
+// 在上游对它都没有意义：必须一个请求都不发。配对断言「额度查询照常」——这是
+// 只 skip 成长、不 continue 整轮的关键（否则面板额度永远不刷新）。
+func TestAPIKeyGateSkipsGrowthTasks(t *testing.T) {
+	restoreClock := nowForNightWindow
+	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 7, 23, 30, 0, 0, time.Local) }
+	t.Cleanup(func() { nowForNightWindow = restoreClock })
+
+	cases := []struct {
+		name     string
+		run      func(*Scheduler)
+		endpoint string
+	}{
+		{"签到", func(s *Scheduler) { s.RunCheckinNow() }, "/daily-checkin"},
+		{"活跃上报", func(s *Scheduler) { s.RunActivityNow() }, "/v2/report"},
+		{"猫猫旅行", func(s *Scheduler) { s.RunTravelNow() }, "/activity/growth/buddy/info"},
+		{"夜猫子", func(s *Scheduler) { s.RunBlackcatNow() }, "/v2/activity/growth/tasks"},
+		{"连登管家", func(s *Scheduler) { s.RunStreakBonusNow() }, "/activity/growth/streak"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, r := apiKeyTestScheduler(t)
+			c.run(s)
+			if r.has(c.endpoint) {
+				t.Fatalf("API Key 账号不应发起 %s，实际请求=%v", c.endpoint, r.snapshot())
+			}
+		})
+	}
+
+	// 额度查询必须照常，且走企业口径端点。
+	s, r := apiKeyTestScheduler(t)
+	s.RunCheckinNow()
+	if !r.has("/get-enterprise-user-usage") {
+		t.Fatalf("API Key 账号应继续刷新额度（企业口径），实际请求=%v", r.snapshot())
+	}
+	if r.has("/billing/meter/get-user-resource") {
+		t.Errorf("API Key 不该走个人资源包端点，实际请求=%v", r.snapshot())
+	}
+	st, ok := s.cfg.Pool.Status("k1")
+	if !ok {
+		t.Fatal("status not found")
+	}
+	if st.Credits != 1188 || st.CreditsTotal != 2000 {
+		t.Errorf("额度映射错误：credits=%d total=%d want 1188/2000", st.Credits, st.CreditsTotal)
+	}
+	if !st.APIKey {
+		t.Errorf("状态应带 api_key 标记：%+v", st)
+	}
+}
+
+// TestAPIKeyKeepaliveSkipped 保活对静态 Key 无意义：它没有 refreshToken，刷新端点
+// 只认 OAuth 设备流。既有代码按「refreshToken 为空即跳过」已经躲开，这里钉住这条
+// 不变式——将来若有人把守卫改成「有 accessToken 就刷」，这个用例会红。
+func TestAPIKeyKeepaliveSkipped(t *testing.T) {
+	s, r := apiKeyTestScheduler(t)
+	s.RunKeepaliveNow()
+	for _, p := range r.snapshot() {
+		if strings.Contains(p, "refresh") || strings.Contains(p, "oauth") {
+			t.Fatalf("静态 API Key 不该触发刷新类请求：%v", r.snapshot())
+		}
+	}
+}

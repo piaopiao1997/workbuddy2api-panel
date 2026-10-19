@@ -130,3 +130,41 @@ func TestPersonalResourceStaysOnPackageEndpoint(t *testing.T) {
 		t.Fatal("应至少请求一次资源包端点")
 	}
 }
+
+// TestAPIKeyResourceUsesEnterpriseEndpoint 静态 API Key 的额度必须走企业口径端点。
+//
+// 判据为什么收在 auth.UsesEnterpriseBilling：个人 get-user-resource 对 ck_/pt_ Key
+// 恒返回空 Accounts（实测 code 0、Accounts null），若这里漏掉 Key 分支，静态 Key 账号
+// 的余额会恒为 0，积分保底（credit_floor）把它当成耗尽号直接挡出选号——号是好的，
+// 只是账单查错了地方。
+func TestAPIKeyResourceUsesEnterpriseEndpoint(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if !strings.Contains(r.URL.Path, "get-enterprise-user-usage") {
+			t.Errorf("静态 API Key 不该走个人资源包端点：%s", r.URL.Path)
+		}
+		// 静态 Key 无企业身份，不该注入 X-Enterprise-Id（否则上游按企业上下文鉴权）。
+		if ent := r.Header.Get("X-Enterprise-Id"); ent != "" {
+			t.Errorf("静态 Key 不该带 X-Enterprise-Id：%q", ent)
+		}
+		w.Write([]byte(`{"code":0,"msg":"OK","data":{"credit":100,"limitNum":1000}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BillingBaseCN: srv.URL}
+	for _, token := range []string{"ck_abc123.secret", "pt_zzz.999"} {
+		paths = nil
+		a := &auth.Auth{UID: "u1", AccessToken: token}
+		remain, total, _, _, _, err := c.UserResourceDetailedWithExpiry(a, 0)
+		if err != nil {
+			t.Fatalf("token=%q err=%v", token, err)
+		}
+		if remain != 900 || total != 1000 {
+			t.Errorf("token=%q remain=%d total=%d want 900/1000", token, remain, total)
+		}
+		if len(paths) == 0 {
+			t.Fatalf("token=%q 应至少请求一次额度端点", token)
+		}
+	}
+}

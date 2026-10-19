@@ -927,3 +927,44 @@ func TestServerReadTimeout(t *testing.T) {
 		t.Error("unparsable read_timeout should fail fast")
 	}
 }
+
+// TestDNSServersConfigAndEnv dns_servers 两种来源：配置文件数组原样保留；
+// WB2A_DNS 逗号分隔覆盖（去空白、丢空项）。空 = 系统解析器，不得塞空串进去。
+func TestDNSServersConfigAndEnv(t *testing.T) {
+	c, err := ParseConfig([]byte(`{"dns_servers":["223.5.5.5","1.1.1.1:5353"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c.DNSServers, ","); got != "223.5.5.5,1.1.1.1:5353" {
+		t.Fatalf("文件配置 dns_servers=%v", c.DNSServers)
+	}
+
+	t.Setenv("WB2A_DNS", " 119.29.29.29 , ,8.8.8.8")
+	c2, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(c2.DNSServers, ","); got != "119.29.29.29,8.8.8.8" {
+		t.Fatalf("WB2A_DNS 覆盖结果=%v", c2.DNSServers)
+	}
+
+	// 面板/环境变量管理的字段清单要认它，否则面板会让人以为改了配置能生效。
+	managed := c2.EnvironmentManagedFields()
+	found := false
+	for _, f := range managed {
+		if f == "dns_servers" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("dns_servers 应出现在环境变量管理字段里：%v", managed)
+	}
+
+	c3, err := ParseConfig([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c3.DNSServers) != 0 {
+		t.Fatalf("缺省应为空（系统解析器）：%v", c3.DNSServers)
+	}
+}

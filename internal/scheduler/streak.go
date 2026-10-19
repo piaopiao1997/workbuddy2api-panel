@@ -32,8 +32,8 @@ func (s *Scheduler) RunStreakBonusNow() {
 			s.claimCompensationQuiet(a)
 			continue
 		}
-		if a.IsEnterprise() {
-			continue // 企业版门控：无成长体系（成长端点上游 403）
+		if !a.SupportsPersonalGrowth() {
+			continue // 企业版 / 静态 API Key 门控：无个人成长体系
 		}
 		s.streakBonusAccount(a)
 	}

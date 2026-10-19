@@ -423,15 +423,26 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 	return entry
 }
 
+// hiddenModel 报告 (realm, 裸模型名) 是否被 config models.hidden 隐藏。
+//
+// 黑名单语义是「这个模型对本网关不存在」：列表不列、点名调用直接拒绝。四个生效点
+// （cn 对话列表 / global 对话列表 / 出图单列 / chat 与出图入口）共用本判据，避免
+// 各写一份 map 查表而漏掉某一处——漏一处就等于黑名单可被绕过。
+func (h *Handler) hiddenModel(realm, bare string) bool {
+	if bare == "" {
+		return false
+	}
+	_, hide := h.loadLive().HiddenModels[realm+":"+bare]
+	return hide
+}
+
 // modelList 模型列表：CN 模型输出统一加 "cn:" 前缀（gateway 路由协议，与 resolveModel
 // 对称）；global.enabled=true 时追加 global: 前缀的国际版名单。
 // 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
-	// models.hidden 黑名单：快照外提，避免逐条目重复 Load。
-	hidden := h.loadLive().HiddenModels
 	for _, mi := range h.fetchDynamicModels() {
-		if _, ok := hidden["cn:"+mi.ID]; ok {
+		if h.hiddenModel("cn", mi.ID) {
 			continue
 		}
 		entry := map[string]any{
@@ -477,7 +488,7 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
-			if _, ok := hidden["global:"+id]; ok {
+			if h.hiddenModel("global", id) {
 				continue
 			}
 			entry := map[string]any{
@@ -527,6 +538,10 @@ func (h *Handler) generationModelEntries() []map[string]any {
 			// 只列图片：视频没有网关端点（CN 侧无查询路由、视频走连接器），列出来只会
 			// 引诱客户端去调不存在的路由。视频模型照旧不进对话名单（nonChatModel）。
 			if mi.GenerationKind != "image" {
+				continue
+			}
+			// 黑名单同样管出图单列：列表里留着它等于告诉客户端「这个能用」。
+			if h.hiddenModel(realm, mi.ID) {
 				continue
 			}
 			entry := map[string]any{
@@ -677,7 +692,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	// models.hidden 黑名单：点名调用直接拒绝，不打上游、不占选号。
 	// 与 /v1/models 的列表过滤对称（只藏列表不够，知道名字仍可硬调）。
-	if _, hide := h.loadLive().HiddenModels[realm+":"+bareModel]; hide {
+	if h.hiddenModel(realm, bareModel) {
 		writeOpenAIErrorHint(w, http.StatusBadRequest, "model_unavailable",
 			"model is hidden by gateway configuration, try another model", "")
 		st.status = http.StatusBadRequest

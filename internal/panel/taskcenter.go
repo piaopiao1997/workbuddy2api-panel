@@ -46,11 +46,12 @@ func (p *Panel) scanAccountGrowth(a *auth.Auth) scanAccountItem {
 		it.SkipReason = "国际区任务仅支持查询，不执行国内区成长任务"
 		return it
 	}
-	// 企业版门控：企业版无个人成长体系（GET /v2/activity/growth/tasks 上游 403
-	// 「growth system is only available for personal users」），不发任何上游调用。
-	if a.IsEnterprise() {
+	// 无个人账号体系的账号不发任何上游调用：企业版任务端点上游 403（「growth system
+	// is only available for personal users」）；静态 API Key 账号没有个人身份，
+	// 列表与领取同样无意义。
+	if !a.SupportsPersonalEndpoints() {
 		it.Skipped = true
-		it.SkipReason = "企业版无个人成长体系（任务端点上游 403）"
+		it.SkipReason = "无个人成长体系（企业版或静态 API Key）"
 		return it
 	}
 	var errors []string

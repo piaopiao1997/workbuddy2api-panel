@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
 
 // TestChatModelBlockedReportsModelUnavailable 池里号都在、只是每个号都对该模型处于
@@ -63,5 +64,41 @@ func TestChatNoAccountsStillNoHealthyAccount(t *testing.T) {
 	}
 	if strings.Contains(body, "model_unavailable") {
 		t.Errorf("真没号不得报成模型不可用：%s", body)
+	}
+}
+
+// TestApplyErrorPolicyModelForbiddenUses11158Reason 11158「该账号类型无此模型权限」
+// 走的是同一个 (账号,模型) 负缓存通道，但 reason 必须记 11158——运维在 /status
+// 台账上要能分清「这个模型在后端不存在」与「这个号没这个模型的权限」，后者换号就能解。
+func TestApplyErrorPolicyModelForbiddenUses11158Reason(t *testing.T) {
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	p.SetCredits("u1", 1000, 0)
+	h := NewHandler(Config{Pool: p})
+
+	body := `{"code":11158,"msg":"model [claude-opus-4-1] is not allowed for user type","requestId":"r1"}`
+	if kind := upstream.Classify(400, body); kind != upstream.ErrModelBlocked {
+		t.Fatalf("Classify=%v want ErrModelBlocked", kind)
+	}
+	h.applyErrorPolicy("u1", upstream.ErrModelBlocked, body, "claude-opus-4-1", nil)
+
+	st, _ := p.Status("u1")
+	if st.Disabled {
+		t.Fatalf("模型级权限拒绝不得禁用账号：%+v", st)
+	}
+	// 模型级拒绝只避让该模型，账号仍可服务别的模型——不得写账号级冷却。
+	if st.Cooling {
+		t.Fatalf("11158 是模型级拒绝，不该把整个账号冷却掉（kind=%q）", st.CoolKind)
+	}
+	var got string
+	for _, row := range st.RateLimitedModels {
+		if row.Model == "claude-opus-4-1" {
+			got = row.Reason
+			if row.Kind != "model_unavailable" {
+				t.Errorf("台账 kind=%q want model_unavailable", row.Kind)
+			}
+		}
+	}
+	if !strings.HasPrefix(got, upstream.ModelForbiddenReason) {
+		t.Fatalf("台账 reason=%q want 前缀 %q", got, upstream.ModelForbiddenReason)
 	}
 }

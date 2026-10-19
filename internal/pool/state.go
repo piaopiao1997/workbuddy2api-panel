@@ -750,6 +750,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		RateLimitedModels:        p.rateLimitedModelsLocked(e, now),
 		Realm:                    e.a.Realm(),
 		Enterprise:               e.a.IsEnterprise(),
+		APIKey:                   e.a.IsAPIKey(),
 		Nickname:                 e.a.Nickname,
 		Credits:                  e.credits,
 		CreditsTotal:             e.creditsTotal,
@@ -866,8 +867,11 @@ func (p *Pool) rateLimitedModelsLocked(e *entry, now time.Time) []RateLimitedMod
 	for _, m := range models {
 		mc := e.modelCooldowns[m]
 		if !mc.Until.IsZero() && now.Before(mc.Until) {
+			// 11102/11158 是「确定性模型拒绝」（该模型在本域不存在 / 这个号没这个模型
+			// 的权限），不是限流：台账 kind 必须区分，否则运维会把「换个号就能用」误读成
+			// 「等限流恢复」。前缀口径与 BlockModelClear 一致。
 			kind := "rate_limit"
-			if strings.HasPrefix(mc.Reason, "11102") {
+			if strings.HasPrefix(mc.Reason, "11102") || strings.HasPrefix(mc.Reason, "11158") {
 				kind = "model_unavailable"
 			}
 			row := RateLimitedModel{

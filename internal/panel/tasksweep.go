@@ -27,8 +27,8 @@ func (p *Panel) RunTaskSweepNow() (int, string) {
 			continue
 		}
 		a := p.cfg.Pool.AuthByUID(st.UID)
-		if a == nil || a.IsEnterprise() {
-			continue // a==nil 无凭证；企业版无个人成长体系（成长端点上游 403）
+		if a == nil || !a.SupportsPersonalGrowth() {
+			continue // a==nil 无凭证；企业版 / 静态 API Key 无个人成长体系
 		}
 		if !p.tryLockAccount(st.UID) {
 			busy++

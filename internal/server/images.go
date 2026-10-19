@@ -64,6 +64,12 @@ func (h *Handler) images(w http.ResponseWriter, r *http.Request, edit bool) {
 		model = defaultImageModel
 	}
 	realm, bare := resolveModel(model)
+	// models.hidden 同一份黑名单也管出图入口：列表里已经隐藏的模型不该还能直接调。
+	if h.hiddenModel(realm, bare) {
+		writeOpenAIError(w, http.StatusBadRequest, "model_unavailable",
+			"model is hidden by gateway configuration, try another model")
+		return
+	}
 	req["model"] = bare
 	out, err := json.Marshal(req)
 	if err != nil {

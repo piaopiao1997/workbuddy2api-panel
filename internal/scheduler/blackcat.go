@@ -55,8 +55,8 @@ func (s *Scheduler) runBlackcat(ctx context.Context, spread bool) {
 		if a.IsGlobal() {
 			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
 		}
-		if a.IsEnterprise() {
-			continue // 企业版门控：无成长体系（成长端点上游 403）
+		if !a.SupportsPersonalGrowth() {
+			continue // 企业版 / 静态 API Key 门控：无个人成长体系
 		}
 		if !plan.wait(ctx, st.UID) {
 			return // ctx 取消：剩余账号下轮再补

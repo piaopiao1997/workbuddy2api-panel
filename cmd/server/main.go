@@ -168,6 +168,13 @@ func main() {
 
 	up := upstream.New()
 
+	// 出站 DNS（config dns_servers / WB2A_DNS）：显式指定解析器，绕开系统配置。
+	// 典型场景是 Android（无 /etc/resolv.conf，Go 解析器退回 [::1]:53 全域名失败）
+	// 与本地 DNS 被污染。未配置时保持系统解析器，行为零变化。
+	if len(cfg.DNSServers) > 0 {
+		up.SetDNSDialer(upstream.NewDNSDialer(cfg.DNSServers))
+	}
+
 	// 积分保底的「收费」兜底判据：接上游模型目录的积分倍率表。本地实测台账无观测
 	// 时用它判收费——否则「没学过」恒等于「放行」，高价新模型会把触底号一笔打穿
 	// （kimi-k3-1 实案：全池无观测 → 保底全放行 → 两笔打穿并硬冷却到次日 04:00）。
@@ -408,15 +415,15 @@ func main() {
 		// 裸用/测试路径拿到同一缺省值。
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
 		// handler 侧第三道闸（global realm）：false（显式逃生门）时不列 global: 模型名。
-		GlobalEnabled:  cfg.Global.Enabled,
+		GlobalEnabled: cfg.Global.Enabled,
+		// 模型黑名单原始条目；运行期以 livecfg 快照为准（热生效），此处供
+		// Live 为 nil 的裸用/测试路径。
+		ModelsHidden:   cfg.Models.Hidden,
 		AdminEnabled:   cfg.Admin.Enabled,
 		MetricsEnabled: cfg.Metrics.Enabled,
 		Tasks:          sch,
 		Audit:          auditLog,
 		BudgetLimit:    cfg.Budget.DailyCreditLimit,
-		// 模型黑名单原始条目；运行期以 livecfg 快照为准（热生效），此处供
-		// Live 为 nil 的裸用/测试路径。
-		ModelsHidden: cfg.Models.Hidden,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

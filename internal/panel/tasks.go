@@ -16,6 +16,10 @@ import (
 // acceptBatchGap 批量接受的批间节流（对齐脚本 1.05s 口径，避免上游风控）。
 var acceptBatchGap = 1050 * time.Millisecond
 
+// noPersonalTaskMessage 无个人账号体系（企业版 / 静态 API Key）的账号调用任务接口时的
+// 固定说明：这类账号上游没有成长任务可跑，静默返回空列表会被误读成「已全部完成」。
+const noPersonalTaskMessage = "该账号无个人成长体系（企业版或静态 API Key），不支持成长任务"
+
 // accountByUID 取账号凭证；不存在时写 404 并返回 nil。
 func (p *Panel) accountByUID(w http.ResponseWriter, uid string) *auth.Auth {
 	a := p.cfg.Pool.AuthByUID(uid)
@@ -31,6 +35,12 @@ func (p *Panel) accountTasks(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.accountByUID(w, uid)
 	if a == nil {
+		return
+	}
+	if !a.SupportsPersonalEndpoints() {
+		// 静态 API Key 账号没有个人账号身份，成长任务端点在上游对它没有意义；
+		// 明确 422 而不是静默空跑，否则面板显示「0 个任务」会被误读成「都做完了」。
+		writeErr(w, http.StatusUnprocessableEntity, noPersonalTaskMessage)
 		return
 	}
 	tasks, err := p.cfg.Upstream.ListTasks(a)
@@ -73,6 +83,12 @@ func (p *Panel) accountTaskAccept(w http.ResponseWriter, r *http.Request) {
 	if a == nil {
 		return
 	}
+	if !a.SupportsPersonalEndpoints() {
+		// 静态 API Key 账号没有个人账号身份，成长任务端点在上游对它没有意义；
+		// 明确 422 而不是静默空跑，否则面板显示「0 个任务」会被误读成「都做完了」。
+		writeErr(w, http.StatusUnprocessableEntity, noPersonalTaskMessage)
+		return
+	}
 	if a.IsGlobal() {
 		writeErr(w, http.StatusNotImplemented, globalTaskWriteMessage)
 		return
@@ -102,6 +118,12 @@ func (p *Panel) taskAcceptAll(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.accountByUID(w, uid)
 	if a == nil {
+		return
+	}
+	if !a.SupportsPersonalEndpoints() {
+		// 静态 API Key 账号没有个人账号身份，成长任务端点在上游对它没有意义；
+		// 明确 422 而不是静默空跑，否则面板显示「0 个任务」会被误读成「都做完了」。
+		writeErr(w, http.StatusUnprocessableEntity, noPersonalTaskMessage)
 		return
 	}
 	if a.IsGlobal() {
@@ -173,6 +195,12 @@ func (p *Panel) accountTaskClaim(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
 	a := p.accountByUID(w, uid)
 	if a == nil {
+		return
+	}
+	if !a.SupportsPersonalEndpoints() {
+		// 静态 API Key 账号没有个人账号身份，成长任务端点在上游对它没有意义；
+		// 明确 422 而不是静默空跑，否则面板显示「0 个任务」会被误读成「都做完了」。
+		writeErr(w, http.StatusUnprocessableEntity, noPersonalTaskMessage)
 		return
 	}
 	if a.IsGlobal() {

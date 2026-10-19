@@ -2487,9 +2487,11 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 // 把套餐型包的月度周期重置日当成了到期日（实测：cycle=2026-10-31，deduction=2034-12-24），
 // 首页快照因此长期错报最近到期时间与数量。
 func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, buckets []ExpiryBucket, err error) {
-	// 企业版额度不在「个人资源包」体系内：get-user-resource* 对 enterpriseId 非空账号
-	// 恒返回空 Accounts（实测 code 0 且 Accounts null），故分流到企业口径端点。
-	if a.IsEnterprise() {
+	// 企业版与静态 API Key 的额度都不在「个人资源包」体系内：get-user-resource*
+	// 对 enterpriseId 非空账号恒返回空 Accounts（实测 code 0 且 Accounts null），
+	// 对 ck_/pt_ 静态 Key 同样（它没有个人账号身份）。判据收在
+	// auth.UsesEnterpriseBilling 一处，避免两个包各写一遍前缀判断。
+	if a.UsesEnterpriseBilling() {
 		remain, total, expiring, earliestAt, earliestRemaining, err = c.enterpriseResource(a, soon)
 		// 与个人路径同口径：企业额度查询是余额观察者（积分历史）唯一的企业入口——
 		// 企业号没有签到/任务，若此处不通知，它的余额变动将永远无迹可循。
