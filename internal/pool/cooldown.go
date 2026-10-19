@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 )
 
 func (p *Pool) SetCredits(uid string, credits, total int64) {
@@ -518,6 +519,7 @@ func (p *Pool) recordBreakerFailureLocked(e *entry) {
 func (p *Pool) CooldownUntilTomorrow4AM(uid string, reason string) {
 	now := time.Now()
 	p.Cooldown(uid, CoolHard, nextDay4AM(now).Sub(now), reason)
+	proxypool.Default().Unassign(uid)
 }
 
 // nextDay4AM 返回 now 之后最近的一个 04:00（与 now 同一时区）。

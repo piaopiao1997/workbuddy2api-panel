@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 )
 
 type Pool struct {
@@ -432,6 +433,7 @@ func (p *Pool) Remove(uid string) *auth.Auth {
 	delete(p.byUID, uid)
 	p.dirty.Store(true)
 	p.saveLocked()
+	proxypool.Default().Unassign(uid)
 	return e.a
 }
 

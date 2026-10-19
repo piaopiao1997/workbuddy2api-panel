@@ -26,7 +26,11 @@
 //     （详见 reviveCoolingLocked 注释）。
 package pool
 
-import "time"
+import (
+	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+)
 
 // clearCoolingLocked 清冷却域：until/coolKind/softStreak/modelCooldowns 全归零，
 // reason 一并清空。熔断器（fails/retryCount/breakerUntil）不属冷却域，不动。
@@ -54,6 +58,7 @@ func (p *Pool) disableLocked(e *entry, reason string) {
 	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）
 	e.reason = reason
 	p.dirty.Store(true)
+	if e.a != nil && e.a.UID != "" { proxypool.Default().Unassign(e.a.UID) }
 }
 
 // pauseLocked 暂停选号迁移：置 paused 使账号退出选号候选（healthy 判否），

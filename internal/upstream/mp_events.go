@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 )
 
 const mpReportPath = "/v2/report"
@@ -58,6 +59,9 @@ func (c *Client) ReportMPEvent(a *auth.Auth, events ...map[string]any) error {
 	req, err := http.NewRequest(http.MethodPost, c.BillingBaseCN+mpReportPath, bytes.NewReader(raw))
 	if err != nil {
 		return err
+	}
+	if a != nil && a.UID != "" {
+		req = req.WithContext(proxypool.WithUID(req.Context(), a.UID))
 	}
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Content-Type", "application/json")

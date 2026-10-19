@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 )
 
@@ -145,6 +146,9 @@ func (c *Client) injectAccountStableHeaders(req *http.Request, a *auth.Auth) {
 
 // CommonHeaders 设置所有 API 共享的请求头。
 func (c *Client) CommonHeaders(req *http.Request, a *auth.Auth) {
+	if a != nil && a.UID != "" {
+		*req = *req.WithContext(proxypool.WithUID(req.Context(), a.UID))
+	}
 	req.Header.Set("Content-Type", "application/json")
 	// Accept 非流式默认 application/json（D6：去掉宽松的 text/plain, */*）。
 	// chat 流式路径在 ChatHeaders 覆盖为 event-stream。
@@ -390,6 +394,9 @@ func ExtractClientIP(r *http.Request) string {
 // UA 语义：默认**不设置**（保持现状，Go 客户端自带默认 UA）；仅当显式配置
 // c.UserAgent 非空才覆盖——避免默认路径给 billing 引入新的 UA 指纹。
 func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
+	if a != nil && a.UID != "" {
+		*req = *req.WithContext(proxypool.WithUID(req.Context(), a.UID))
+	}
 	// AccessToken 加锁快照（同 ChatHeaders：keepalive 可在 a.mu 内改写）。
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Accept", "application/json")

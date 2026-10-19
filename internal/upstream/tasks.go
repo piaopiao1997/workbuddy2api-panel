@@ -22,6 +22,7 @@ import (
 	"net/url"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 )
 
 // growth 域任务路径（与 scripts/task_common.py 对齐）。
@@ -311,6 +312,9 @@ func (c *Client) ClaimReward(a *auth.Auth, taskCode string) (credit, energy int6
 		c.webBase(a)+"/activity/growth/tasks/"+url.PathEscape(taskCode)+"/claim", nil)
 	if err != nil {
 		return 0, 0, err
+	}
+	if a != nil && a.UID != "" {
+		req = req.WithContext(proxypool.WithUID(req.Context(), a.UID))
 	}
 	// Web 端请求头形状（对照浏览器实际请求）：Origin/Referer 指向 workbuddy.cn 成长中心，
 	// 带 x-client-platform: web 标记来源端。

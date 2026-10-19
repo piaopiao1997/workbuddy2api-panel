@@ -100,3 +100,42 @@ func TestProxyPool_RoundRobin(t *testing.T) {
 		t.Fatalf("round robin should rotate even for same uid, got %s and %s", r1, r2)
 	}
 }
+
+func TestProxyPool_UnassignAndLeastAssigned(t *testing.T) {
+	p := proxypool.New()
+	p.Configure([]string{"http://1.1.1.1:8080", "http://2.2.2.2:8080"}, "per_account")
+
+	// 1. user-1 分配到 P1，user-2 分配到 P2
+	_, r1 := p.Pick("user-1")
+	_, r2 := p.Pick("user-2")
+	if r1 == r2 {
+		t.Fatalf("user-1 and user-2 should be distributed to different proxies, got %s", r1)
+	}
+
+	// 2. Snapshot 检查绑定数
+	snap := p.Snapshot()
+	for _, it := range snap {
+		if it.Accounts != 1 {
+			t.Fatalf("each proxy should have 1 account, got %d for %s", it.Accounts, it.Host)
+		}
+	}
+
+	// 3. user-1 释放绑定 (Unassign)
+	p.Unassign("user-1")
+	snap = p.Snapshot()
+	var freeHost string
+	for _, it := range snap {
+		if it.Accounts == 0 {
+			freeHost = it.Host
+		}
+	}
+	if freeHost == "" {
+		t.Fatalf("expected one proxy with 0 accounts after unassign")
+	}
+
+	// 4. 新用户 user-3 进来，应该自动被分配到当前绑定数最少 (0) 的出口
+	u3, _ := p.Pick("user-3")
+	if u3.Host != freeHost {
+		t.Fatalf("user-3 should be picked by least-assigned proxy %s, got %s", freeHost, u3.Host)
+	}
+}

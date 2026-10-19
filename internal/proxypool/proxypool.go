@@ -191,7 +191,7 @@ func (p *Pool) Pick(uid string) (*url.URL, string) {
 				return e.url, e.raw
 			}
 		}
-		e := p.pickHealthyLocked()
+		e := p.pickLeastAssignedHealthyLocked()
 		if e == nil {
 			return nil, ""
 		}
@@ -207,6 +207,52 @@ func (p *Pool) Pick(uid string) (*url.URL, string) {
 		return nil, ""
 	}
 	return e.url, e.raw
+}
+
+// pickLeastAssignedHealthyLocked 从健康出口中挑选当前绑定账号数最少的（负载均衡）。
+// 若绑定数相同，按游标顺序决胜。调用方须持写锁。
+func (p *Pool) pickLeastAssignedHealthyLocked() *entry {
+	n := len(p.entries)
+	if n == 0 {
+		return nil
+	}
+	counts := make(map[*entry]int, n)
+	var healthy []*entry
+	for _, e := range p.entries {
+		if !e.dead.Load() {
+			healthy = append(healthy, e)
+			counts[e] = 0
+		}
+	}
+	if len(healthy) == 0 {
+		return nil
+	}
+	for _, e := range p.assign {
+		if _, ok := counts[e]; ok {
+			counts[e]++
+		}
+	}
+	var best *entry
+	minCount := int(^uint(0) >> 1)
+	start := int(p.cursor.Add(1)-1) % len(healthy)
+	for i := 0; i < len(healthy); i++ {
+		e := healthy[(start+i)%len(healthy)]
+		if c := counts[e]; c < minCount {
+			minCount = c
+			best = e
+		}
+	}
+	return best
+}
+
+// Unassign 解除指定账号的代理绑定（账号被禁用/删除/失效/积分耗尽时自动释放名额）。
+func (p *Pool) Unassign(uid string) {
+	if uid == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.assign, uid)
 }
 
 // pickHealthyLocked 按游标轮转找一个非 dead 出口。调用方须持写锁。
