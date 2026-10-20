@@ -66,18 +66,24 @@ func normalizeModelName(obj map[string]any) {
 // 导出入口不注入 prompt_cache_key（保持既有公开语义）；生产路径由
 // client.prepareBody 调用 prepareBodyOpt 并传入 cache 参数。
 func PrepareBodyOptWithEffortsDefaultAndCaps(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string, maxOut map[string]int64) ([]byte, string) {
-	return prepareBodyOpt(src, sanitize, efforts, defaultEfforts, maxOut, "", "", false)
+	body, _, eff := prepareBodyOpt(src, sanitize, efforts, defaultEfforts, maxOut, "", "", false)
+	return body, eff
 }
 
 // prepareBodyOpt 是完整管线：injectCache=true 时在同一次 map 解析里注入
 // prompt_cache_key（优先级见 promptCacheKeyFor），避免二次 Unmarshal/Marshal。
-func prepareBodyOpt(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string, maxOut map[string]int64, cacheUID, cacheConversation string, injectCache bool) ([]byte, string) {
+//
+// 返回 (改写后请求体, 客户端原始请求档位, 本次实际生效档位)：
+//   - requested 在 injectThinking 之前抓取，因此不含网关补的默认档——它回答
+//     「客户端到底发没发、发的哪一档」（issue #43/#18 的判别依据）；
+//   - effective 是降级后的出站档位，未携带/未知模型/未知档位 → ""。
+func prepareBodyOpt(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string, maxOut map[string]int64, cacheUID, cacheConversation string, injectCache bool) ([]byte, string, string) {
 	if len(src) == 0 {
-		return src, ""
+		return src, "", ""
 	}
 	var obj map[string]any
 	if err := json.Unmarshal(src, &obj); err != nil {
-		return src, ""
+		return src, "", ""
 	}
 	// 先剥 realm 前缀：后续 injectCatalogMaxTokens / clampGPTMinMaxTokens /
 	// injectThinking / normalizeReasoningEffort 都按裸模型名查表，晚一步就会查空。
@@ -123,6 +129,11 @@ func prepareBodyOpt(src []byte, sanitize bool, efforts map[string][]string, defa
 	// DeepSeek 思维链开关（见 thinking.go）：注入 thinking.type=enabled + 缺档补默认档。
 	// 先于 normalizeReasoningEffort 执行：补入的默认档也要走既有降级管线，
 	// 模型不支持默认档时自动落到 ≤ 默认档的最高支持档（不出站不合规档位）。
+	// requested 必须在 injectThinking 之前抓：它要回答的是「客户端发了什么」，
+	// 而 injectThinking 会给缺档的请求补默认档——补完之后两者就再也分不开了
+	// （issue #43：客户端设 max、日志显示 high，读者无法判断是「没收到 max」
+	// 还是「收到了但降级」，这一列必须能自证）。
+	requested := requestedEffort(obj)
 	modelName, _ := obj["model"].(string)
 	injectThinking(obj, lookupDefaultEffort(defaultEfforts, modelName))
 	effort := normalizeReasoningEffort(obj, efforts, defaultEfforts)
@@ -142,9 +153,9 @@ func prepareBodyOpt(src []byte, sanitize bool, efforts map[string][]string, defa
 	}
 	out, err := json.Marshal(obj)
 	if err != nil {
-		return src, effort
+		return src, requested, effort
 	}
-	return out, effort
+	return out, requested, effort
 }
 
 // translateMaxCompletionTokens 把 OpenAI 别名 max_completion_tokens 翻译为上游
@@ -233,6 +244,25 @@ func injectCatalogMaxTokens(obj map[string]any, maxOut map[string]int64) {
 
 // effortRank 档位从低到高。
 var effortRank = map[string]int{"off": 0, "minimal": 1, "low": 2, "medium": 3, "high": 4, "xhigh": 5, "max": 6}
+
+// requestedEffort 读取客户端原始请求的思考档位（snake 优先，camel 兜底），
+// 未携带或非字符串 → ""。与 normalizeReasoningEffort 的取值口径一致，
+// 但**不**做降级、不补默认档：它只回答「客户端发了什么」。
+//
+// 为什么单独留一列：网关对 deepseek 缺档请求会补默认档（thinking.go），
+// 之后 requested 与 effective 就再也分不开——日志只报 effective 时，
+// 「客户端设了 max、日志却是 high」无法判断是客户端没发出去，还是被降级了
+// （issue #43 / #18）。
+func requestedEffort(obj map[string]any) string {
+	for _, k := range []string{"reasoning_effort", "reasoningEffort"} {
+		if v, ok := obj[k].(string); ok {
+			if s := strings.TrimSpace(strings.ToLower(v)); s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
 
 // normalizeReasoningEffort 把请求档位对齐到模型支持的档位（snake/camel 双字段兼容），
 // 返回本次最终生效的档位（未携带字段/未知模型/未知档位/模型未缓存 → ""）。

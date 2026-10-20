@@ -957,6 +957,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta, &hopTiming)
 		st.prep, st.do = hopTiming.Prep, hopTiming.Do
 		st.effort = hopTiming.Effort
+		st.effortReq = hopTiming.RequestedEffort
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
 		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支
 		// （terr 为 nil 但 status>=400，如 ErrNone 兜底）回落本地 Classify，双保险。

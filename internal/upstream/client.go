@@ -960,10 +960,10 @@ func (c *Client) chatBase(a *auth.Auth) string {
 }
 
 // prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
-// prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
 // realm 为账号 Realm()（cn/global），供 efforts 缓存分桶（跨域 effort 集合不互相污染）。
-// 返回改写后的请求体与本次实际生效的思考档位（见 normalizeReasoningEffort）。
-func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) ([]byte, string) {
+// 返回改写后的请求体、客户端原始请求档位与本次实际生效档位
+// （requested 与 effective 的区别见 prepareBodyOpt 注释；issue #43）。
+func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) ([]byte, string, string) {
 	efforts, defs := c.effortsSnapshot(realm), c.defaultEffortsSnapshot(realm)
 	maxOut := c.modelMaxOutSnapshot(realm)
 	if realmKey(realm) == "global" {
@@ -975,8 +975,7 @@ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) ([]
 	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
 	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。与 body 归一化共用
 	// prepareBodyOpt 的同一次 map 解析，不再二次 Unmarshal/Marshal。
-	body, effort := prepareBodyOpt(body, c.SanitizeFingerprints.Load(), efforts, defs, maxOut, uid, conversationID, true)
-	return body, effort
+	return prepareBodyOpt(body, c.SanitizeFingerprints.Load(), efforts, defs, maxOut, uid, conversationID, true)
 }
 
 // effortsSnapshot 返回 effort 能力缓存副本；nil 表示未知（透传不降级）。
@@ -1358,10 +1357,11 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 		ctx = context.Background()
 	}
 	prepStart := time.Now()
-	prepared, effort := c.prepareBody(body, a.Realm(), a.UID, cacheKeySource(meta))
+	prepared, requested, effort := c.prepareBody(body, a.Realm(), a.UID, cacheKeySource(meta))
 	if timing != nil {
 		timing.Prep += time.Since(prepStart)
-		timing.Effort = effort // 生效思考档位（客户端未携带该字段时为空）
+		timing.RequestedEffort = requested // 客户端原始档位（未携带 → 空）
+		timing.Effort = effort             // 生效档位（可能被降级；空 = 未参与降级）
 	}
 	if c.globalOn(a) {
 		prepared = ensureConsoleSystem(prepared)

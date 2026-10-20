@@ -77,8 +77,12 @@ type chatStat struct {
 	// 零值 = 未测量（非流式/未走到上游）。
 	prep, do time.Duration
 
-	// effort 本次实际生效的思考档位（客户端携带过 reasoning_effort 才有值）。
-	effort string
+	// effort 本次实际生效的思考档位（降级后出站值）。
+	// effortReq 客户端原始请求档位（injectThinking 补默认档之前抓的）。
+	// 两者分开的原因见 issue #43：只报生效值时，「客户端设了 max、日志显示 high」
+	// 无法判断是客户端根本没发出去，还是被网关按模型档位表降级了。
+	effort    string
+	effortReq string
 
 	logged bool
 }
@@ -106,7 +110,7 @@ func (s *chatStat) done() {
 	logChatRowFull(s.ttfb, total, s.model, s.mode, s.uid, s.nick, s.status, s.toks,
 		s.think, s.cacheHit, s.cacheMiss, s.hasCache,
 		s.requestID, s.outcome, s.attempts, s.credit, s.hasCredit,
-		s.clientIP, s.userAgent, s.prep, s.do, s.effort)
+		s.clientIP, s.userAgent, s.prep, s.do, s.effort, s.effortReq)
 	s.budget.add(s.credit, s.hasCredit)
 	noteProm(s, total)
 }
@@ -580,7 +584,7 @@ const (
 //
 // logChatRow 旧形态（带缓存命中率、无请求 ID）；新代码请用 logChatRowFull。
 func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int, cacheHit, cacheMiss int, hasCache bool) {
-	logChatRowFull(ttfb, total, model, mode, uid, nick, status, toks, -1, cacheHit, cacheMiss, hasCache, "", "", 0, 0, false, "", "", 0, 0, "")
+	logChatRowFull(ttfb, total, model, mode, uid, nick, status, toks, -1, cacheHit, cacheMiss, hasCache, "", "", 0, 0, false, "", "", 0, 0, "", "")
 }
 
 // logChatRowEx 带请求 ID、结果、重试、积分与调用来源字段的扩展形态；缓存列不传
@@ -589,14 +593,18 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 	requestID, outcome string, attempts int, credit float64, hasCredit bool,
 	clientIP, userAgent string) {
 	logChatRowFull(ttfb, total, model, mode, uid, nick, status, toks, -1, 0, 0, false,
-		requestID, outcome, attempts, credit, hasCredit, clientIP, userAgent, 0, 0, "")
+		requestID, outcome, attempts, credit, hasCredit, clientIP, userAgent, 0, 0, "", "")
 }
 
 // logChatRowFull 是本文件唯一的行输出点：宽表字段 + 缓存列 + 可选请求 ID/结果/重试/积分尾段 + 调用来源段。
+//
+// effort 为生效档位、effortReq 为客户端原始档位（见 chatStat 字段注释）：
+// 两者相同只报 effort=；不同报 effort=max->high（客户端要什么、实际发出去什么
+// 一眼可见）；客户端未携带则两个都不报。
 func logChatRowFull(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int,
 	think int, cacheHit, cacheMiss int, hasCache bool,
 	requestID, outcome string, attempts int, credit float64, hasCredit bool,
-	clientIP, userAgent string, prep, do time.Duration, effort string) {
+	clientIP, userAgent string, prep, do time.Duration, effort, effortReq string) {
 	if !chatLogEnabled {
 		return
 	}
@@ -636,10 +644,16 @@ func logChatRowFull(ttfb, total time.Duration, model, mode, uid, nick string, st
 	if do > 0 || prep > 0 {
 		split = fmt.Sprintf(" prep=%dms do=%dms", prep.Milliseconds(), do.Milliseconds())
 	}
-	// 生效思考档位（见 upstream.normalizeReasoningEffort）：只在客户端携带过该字段时输出，
+	// 思考档位（见 upstream.normalizeReasoningEffort）：只在客户端携带过该字段时输出，
 	// 让"我要 medium 实际发出去的却是 low"这类静默改写当场可见。
+	// 被降级时显示 requested->effective（issue #43：只报生效值会让读者误以为
+	// 客户端根本没发 max，实际是模型档位表里没有这一档）。
 	if effort != "" {
-		split += " effort=" + effort
+		if effortReq != "" && !strings.EqualFold(effortReq, effort) {
+			split += " effort=" + effortReq + "->" + effort
+		} else {
+			split += " effort=" + effort
+		}
 	}
 	extra := ""
 	if requestID != "" {
