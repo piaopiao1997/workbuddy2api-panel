@@ -70,7 +70,7 @@ func (s *Scheduler) CompensationRows() []CompensationRow {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			out[i] = s.compensationRowOf(st, false)
+			out[i] = s.compensationRowOf(st, false, false)
 		}(i, st)
 	}
 	wg.Wait()
@@ -84,11 +84,14 @@ func (s *Scheduler) CompensateOne(uid string) CompensationRow {
 	if !ok {
 		return CompensationRow{UID: uid, Skip: true, SkipReason: "账号不存在", Error: "account not found"}
 	}
-	return s.compensationRowOf(st, true)
+	return s.compensationRowOf(st, true, false)
 }
 
 // compensationRowOf 单账号处理：claim=false 只查状态，claim=true 待领则领。
-func (s *Scheduler) compensationRowOf(st pool.Status, claim bool) CompensationRow {
+//
+// respectGuard=true 时按 (uid, end_time) 跳过「本进程已试过」的期次——排程专用，
+// 避免上游 claimed 恒 false 导致的每轮重复 claim。面板手动领取传 false（允许重试）。
+func (s *Scheduler) compensationRowOf(st pool.Status, claim, respectGuard bool) CompensationRow {
 	row := CompensationRow{UID: st.UID, Nickname: st.Nickname, Realm: st.Realm}
 	if reason := compSkipReason(st); reason != "" {
 		row.Skip, row.SkipReason = true, reason
@@ -108,15 +111,27 @@ func (s *Scheduler) compensationRowOf(st pool.Status, claim bool) CompensationRo
 	if !claim || !src.Pending() {
 		return row
 	}
+	// 本期已试过（同 uid + 同 end_time）→ 不再重复 claim。
+	// 上游 claimed 字段恒 false，只能本地记；end_time 变了就是上游新开一期，会重新试。
+	guardKey := st.UID + "|" + src.EndTime
+	if respectGuard && s.compGuarded(guardKey) {
+		return row
+	}
 	credit, err := s.cfg.Upstream.ClaimCompensation(a)
+	s.markCompGuarded(guardKey) // 无论成败都记：失败重试交给下一期/手动按钮
 	if err != nil {
 		row.Error = err.Error()
 		return row
 	}
-	// 回执不填 credit 时用状态查询已知的可领额度兜底：上游确有「code=0 且无 credit 字段」
-	// 的回执（实测已领过的号每天就是这样），此刻账号其实已到账——显示 0 是在说反话。
+	// ★ 上游对「已领过 / 本次无发放」回 code=0 且**不带 credit 字段**（解析成 0）。
+	//
+	// 旧代码在这里用 src.CreditNum 兜底，把「没发」写成了「🎊 +500c 已到账」——
+	// 2026-10-20 用 credit-history 证伪：18 点后 340 条 +500c 日志，
+	// 而全量 2000 条余额流水里 delta=+500 出现 **0 次**（同期只有签到 +10/+60）。
+	// 现在如实记录：Credit=0 表示本次实际到账 0；Claimed 仍置 true 表示已处理过。
 	if credit <= 0 {
-		credit = src.CreditNum
+		row.Credit, row.Claimed = 0, true
+		return row
 	}
 	row.Credit, row.Claimed = credit, true
 	return row
@@ -126,15 +141,40 @@ func (s *Scheduler) compensationRowOf(st pool.Status, claim bool) CompensationRo
 // 无待领（无活动 / 已领 / 无额度）静默——这是正确形态，不是失败；查询失败与领取失败
 // 一律 WARN（含可领额度与截止，便于判断是否还剩时间）。
 func (s *Scheduler) claimCompensationQuiet(a *auth.Auth) int64 {
-	row := s.CompensateOne(a.UID)
+	// 排程路径走 respectGuard=true：上游 claimed 恒 false，不设本地闸门就会每次签到
+	// 都把全池号重复 claim 一遍（350 次/轮，永远拿不到新发放）。
+	st, ok := s.cfg.Pool.Status(a.UID)
+	if !ok {
+		return 0
+	}
+	row := s.compensationRowOf(st, true, true)
 	label := logfmt.Label(a.UID, a.Nickname)
 	switch {
 	case row.Error != "" && !row.Claimed:
 		log.Printf("WARN: streak-bonus %s: 补偿处理失败（可领 %dc，截止 %s）: %s", label, row.Credit, row.EndTime, row.Error)
 	case row.Claimed && row.Credit > 0:
+		// 只有**真拿到 credit** 才打这条。credit<=0（上游回执无 credit 字段 =
+		// 已领过/本次无发放）静默——旧代码用可领额度兜底，把「没发」写成「+500c 已到账」。
 		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc（截止 %s）", label, row.Credit, row.EndTime)
 	}
 	return row.Credit
+}
+
+// compGuarded 报告本期补偿是否已在本进程内尝试过。
+func (s *Scheduler) compGuarded(key string) bool {
+	s.compGuardMu.Lock()
+	defer s.compGuardMu.Unlock()
+	return s.compGuard[key]
+}
+
+// markCompGuarded 记下「本期已尝试」。懒初始化 map（零值 Scheduler 也可用）。
+func (s *Scheduler) markCompGuarded(key string) {
+	s.compGuardMu.Lock()
+	defer s.compGuardMu.Unlock()
+	if s.compGuard == nil {
+		s.compGuard = make(map[string]bool)
+	}
+	s.compGuard[key] = true
 }
 
 // claimGiftQuiet 排程侧单账号新手礼包：与补偿同一纪律——先查状态，待领才领。
@@ -157,14 +197,22 @@ func (s *Scheduler) claimGiftQuiet(a *auth.Auth) int64 {
 	if !src.Pending() {
 		return 0
 	}
+	// 与补偿同一把闸：本期（同 uid + 同 end_time）已试过就不再重复 claim。
+	guardKey := "gift|" + a.UID + "|" + src.EndTime
+	if s.compGuarded(guardKey) {
+		return 0
+	}
 	credit, err := s.cfg.Upstream.ClaimGift(a)
+	s.markCompGuarded(guardKey) // 无论成败都记：重试交给下一期或面板手动
 	if err != nil {
 		log.Printf("WARN: streak-bonus %s: 礼包领取失败（可领 %dc，截止 %s）: %v", label, src.CreditNum, src.EndTime, err)
 		return 0
 	}
-	// 同补偿：回执不填 credit 就用状态查询已知额度兜底（否则日志会写「+0c」而钱已到账）。
+	// ★ 与补偿同源的问题（2026-10-20 一并修）：上游对「已领过」回 200 + 无 credit 字段，
+	// 旧代码用 src.CreditNum 兜底，把「没发」写成「🎊 +1000c 已到账」。
+	// 现在只认真实回执：credit<=0 就是本次到账 0，静默返回。
 	if credit <= 0 {
-		credit = src.CreditNum
+		return 0
 	}
 	log.Printf("streak-bonus %s: 🎊 新手礼包 +%dc（截止 %s）", label, credit, src.EndTime)
 	return credit

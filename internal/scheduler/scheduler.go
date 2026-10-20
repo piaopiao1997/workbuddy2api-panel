@@ -89,6 +89,16 @@ type Scheduler struct {
 	balanceInterval atomic.Int64
 	sweepInterval   atomic.Int64
 
+	// compGuardMu/compGuard 补偿「本期已试过」记账（key = uid + "|" + end_time）。
+	//
+	// 为什么需要：上游 compensation-status 的 claimed 字段**恒为 false**（2026-10-20 实测，
+	// 已领过的号照样回 claimed:false），于是 Pending() 恒真 → 每次签到都重复 claim 一遍
+	// 全池 350 个号，白打请求却永远拿不到新发放。
+	// 只记进程内：重启后每期再试一次，代价可接受（次数极少），也不会漏掉上游新开的期次
+	// （end_time 变了就是新 key）。
+	compGuardMu sync.Mutex
+	compGuard   map[string]bool
+
 	// authHealMu/authHealAt 401→refresh 求证的退避记账（uid → 上次求证成功时刻）。
 	// 降级 token（billing 恒 401、chat 仍可用）会让每轮探测都 401，不设退避就是每
 	// 5 分钟轮换一次 RT——换不来可用凭据，只放大上游风控与并发竞态。

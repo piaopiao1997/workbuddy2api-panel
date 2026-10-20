@@ -340,13 +340,17 @@ func TestStreakBonusGiftStatusFailureSkipsClaim(t *testing.T) {
 	}
 }
 
-// TestBenefitClaimWithoutCreditUsesStatusAmount 领取成功但回执不填 credit 时，用状态查询
-// 已知的可领额度兜底：上游确有「code=0 且无 credit 字段」的回执，此刻钱已到账，显示 0
-// 是在说反话（面板会显示「已领 · 0 积分」）。
-func TestBenefitClaimWithoutCreditUsesStatusAmount(t *testing.T) {
+// TestBenefitClaimWithoutCreditReportsZero 回执不填 credit 时按「本次到账 0」如实记录。
+//
+// 这条用例在 2026-10-20 被反转：此前断言「回落到状态额度 500」，理由是「钱已到账、
+// 显示 0 是在说反话」。但用 credit-history 一验就穿了——18 点后 340 条「🎊 +500c」日志，
+// 而全量 2000 条余额流水里 delta=+500 出现 **0 次**（同期只有签到 +10/+60）。
+// 真相：上游对「已领过」回 code=0 且不带 credit 字段 = **本次没有发放**。
+// 现在严格只认回执，0 就是 0，绝不拿「可领额度」冒充「已到账」。
+func TestBenefitClaimWithoutCreditReportsZero(t *testing.T) {
 	stub := &compStub{
 		statusBody:     `{"code":0,"msg":"OK","data":{"claimed":false,"active":true,"credit_num":500,"end_time":"2026-10-22 23:59:59"}}`,
-		claimBody:      `{"code":0,"msg":"OK","data":{}}`, // 无 credit 字段
+		claimBody:      `{"code":0,"msg":"OK","data":{}}`, // 无 credit 字段 = 本次无发放
 		giftStatusBody: `{"code":0,"msg":"OK","data":{"claimed":false,"active":true,"credit_num":1000,"end_time":"2026-10-31 23:59:59"}}`,
 		giftClaimBody:  `{"code":0,"msg":"OK","data":{}}`,
 	}
@@ -354,15 +358,82 @@ func TestBenefitClaimWithoutCreditUsesStatusAmount(t *testing.T) {
 
 	row := s.CompensateOne("u1")
 	if row.Error != "" || !row.Claimed {
-		t.Fatalf("领取应成功: %+v", row)
+		t.Fatalf("处理应成功（Claimed=true 表示已处理过）: %+v", row)
 	}
-	if row.Credit != 500 {
-		t.Errorf("回执无 credit 应回落到状态额度 500，实得 %d（面板会显示 0 而钱已到账）", row.Credit)
+	if row.Credit != 0 {
+		t.Errorf("回执无 credit 时应如实记 0（本次到账 0），实得 %d —— 这正是假 +500c 的来源", row.Credit)
 	}
 
 	a := s.cfg.Pool.AuthByUID("u1")
+	if got := s.claimGiftQuiet(a); got != 0 {
+		t.Errorf("礼包同理：回执无 credit 应记 0，实得 %d", got)
+	}
+}
+
+// TestCompensationGuardSkipsRepeatClaim 同一期（同 uid + 同 end_time）只 claim 一次。
+//
+// 背景：上游 claimed 字段**恒为 false**（已领过也回 false），Pending() 恒真 →
+// 旧代码每次签到都把全池号重复 claim 一遍（350 次/轮，永远拿不到新发放）。
+func TestCompensationGuardSkipsRepeatClaim(t *testing.T) {
+	stub := &compStub{
+		statusBody: `{"code":0,"msg":"OK","data":{"claimed":false,"active":true,"credit_num":500,"end_time":"2026-10-22 23:59:59"}}`,
+		claimBody:  `{"code":0,"msg":"OK","data":{}}`,
+	}
+	s := compScheduler(t, stub)
+
+	s.RunStreakBonusNow()
+	_, first := stub.counts()
+	if first != 1 {
+		t.Fatalf("第一轮应 claim 1 次，实得 %d", first)
+	}
+
+	s.RunStreakBonusNow() // 同一进程第二轮（模拟下一次签到）
+	_, second := stub.counts()
+	if second != first {
+		t.Errorf("同一期不得重复 claim：第一轮 %d 次，第二轮累计 %d 次", first, second)
+	}
+}
+
+// TestCompensationGuardResetsOnNewPeriod end_time 变了（上游新开一期）必须重新尝试。
+func TestCompensationGuardResetsOnNewPeriod(t *testing.T) {
+	stub := &compStub{
+		statusBody: `{"code":0,"msg":"OK","data":{"claimed":false,"active":true,"credit_num":500,"end_time":"2026-10-22 23:59:59"}}`,
+		claimBody:  `{"code":0,"msg":"OK","data":{}}`,
+	}
+	s := compScheduler(t, stub)
+
+	s.RunStreakBonusNow()
+	_, first := stub.counts()
+
+	// 上游换期：end_time 变了 → guard key 变 → 应再试一次
+	stub.mu.Lock()
+	stub.statusBody = `{"code":0,"msg":"OK","data":{"claimed":false,"active":true,"credit_num":800,"end_time":"2026-11-30 23:59:59"}}`
+	stub.mu.Unlock()
+
+	s.RunStreakBonusNow()
+	_, second := stub.counts()
+	if second != first+1 {
+		t.Errorf("新一期应重新 claim：前一版 %d 次，换期后累计 %d 次（期望 +1）", first, second)
+	}
+}
+
+// TestGiftGuardSkipsRepeatClaim 礼包同款闸门。
+func TestGiftGuardSkipsRepeatClaim(t *testing.T) {
+	stub := &compStub{
+		giftStatusBody: `{"code":0,"msg":"OK","data":{"claimed":false,"active":true,"credit_num":1000,"end_time":"2026-10-31 23:59:59"}}`,
+		giftClaimBody:  `{"code":0,"msg":"OK","data":{"credit":1000}}`,
+	}
+	s := compScheduler(t, stub)
+	a := s.cfg.Pool.AuthByUID("u1")
+
 	if got := s.claimGiftQuiet(a); got != 1000 {
-		t.Errorf("礼包同理：want 1000（状态额度），实得 %d", got)
+		t.Fatalf("首发应到账 1000，实得 %d", got)
+	}
+	if got := s.claimGiftQuiet(a); got != 0 {
+		t.Errorf("同一期重复调用应返回 0（已被闸门拦下），实得 %d", got)
+	}
+	if stub.giftClaimCalls != 1 {
+		t.Errorf("gift claim 调用次数=%d want 1（闸门未生效）", stub.giftClaimCalls)
 	}
 }
 
