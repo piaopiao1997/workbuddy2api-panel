@@ -24,6 +24,60 @@
 > 被浩瑜推翻：**这些是调用时概率触发的，没撞上不等于不会撞上**。当天傍晚就实测到一个号
 > 被上游判 `11140 账号存在异常行为，已受限` —— 正是要跟的那批修复治的病。
 
+## 🗂 remote 结构（10-21 起，默认安全）
+
+```
+origin   → piaopiao1997/wb2api-ops            (private)  ← 日常 push 目标
+public   → piaopiao1997/workbuddy2api-panel   (public fork)  ← 只用来提 PR
+upstream → misakano7545/workbuddy2api-panel   (上游)
+```
+
+**为什么把 `origin` 让给私有仓库**：`git push` 不带参数时落到 `origin`。
+让默认目标是私有，就**不可能手滑把运维代码推上公开**；要推公开必须显式写 `public`。
+
+分支的 upstream 归属：
+
+| 分支 | 跟踪 | 含义 |
+|---|---|---|
+| `ops/daofaziran` | `origin/ops/daofaziran`（私有） | 运维主分支，`git push` 即备份 |
+| `main` | `origin/main`（私有） | 上游 main 的镜像 |
+| `pr/<名字>` | `public/pr/<名字>`（公开） | 提 PR 的临时分支，**用完即删** |
+
+## 🔁 两套日常流程
+
+### A. 改自己的东西（占 99% 的时间）
+
+```bash
+git checkout ops/daofaziran
+# ... 改代码 ...
+git commit -m "fix(...): ..."
+git push                                   # → 私有仓库，安全
+# 上线：docker tag 回滚点 → docker compose build → stop → up -d
+```
+
+### B. 给上游提增强 / bugfix（偶尔）
+
+```bash
+cd ~/workbuddy2api-panel-new
+bash ~/ops/upstream-triage.sh              # 30 秒出「噪音 / 运行时」清单 + 撞车预判
+
+git checkout -B pr/<起个名字> upstream/main
+git cherry-pick -x <上游SHA>               # 一律 -x，自动记来源
+# 在 golang:1.23-alpine 容器里跑 gofmt / build / test
+
+git push public pr/<起个名字>              # ← 显式推公开，这一条会公开代码
+# 用 API 开 PR（脚本模板：outputs/upstream-sync-20261020/create_pr.py）
+
+git checkout ops/daofaziran               # 回运维分支
+git branch -D pr/<起个名字>                # 本地清掉；远端 public 上的要等 PR 结案再删
+```
+
+### 🚫 三条铁律
+
+1. **永不** `git push public ops/daofaziran` —— 这一条就等于全量公开
+2. **永不** `git push --all public` / `git push --mirror`
+3. 推公开前**必须**跑一遍敏感审查（见下方命令），且确认 `git config user.name/email` 是对的
+
 ## 同步纪律
 
 - cherry-pick **一律加 `-x`**：`git cherry-pick -x <SHA>` —— 提交正文自动记下来源 SHA，台账自动就位
@@ -94,9 +148,25 @@
 3. **性价比已经被工具改变了**：`upstream-triage.sh` 已把每次追新的评审从 30–40 分钟压到 30 秒，
    为省剩余那点冲突处理时间而捐核心资产，交换不对称。
 
-> 🔴 **但要注意**：`3f78990`（代理池初版）**早已躺在这个公开 fork 的 `ops/daofaziran` 分支上**，
-> 全世界可读（`9a98a29` / `744b428` 两条增强未推送，还在本地）。
-> 这个 fork 的 `private` = **False**。是否清理远端那条分支，待定。
+> 🔴 **事实更正（10-21 00:3x，婉婉之前判断错了）**
+>
+> 早先婉婉说「`9a98a29` / `744b428` 两条代理池增强未推送、还在本地」——**这是错的**。
+> 那次判定用的是**过期的本地 tracking ref**（`origin/ops/daofaziran` 快照停在 `3f78990`），
+> 而远端实际早已是 `b3c5c2b`。用实时 ref 复核后：
+>
+> ```
+> ⚠️ 已公开  3f78990  代理池初版（per_account 单号单代理 + 健康度熔断）
+> ⚠️ 已公开  9a98a29  代理池增强（自动解绑 / 最少分配 / 全路径路由）
+> ⚠️ 已公开  744b428  代理池熔断接线
+> ⚠️ 已公开  44e2ebb  删号前 state 取证备份
+> ⚠️ 已公开  b3c5c2b  补偿/礼包修复
+> ⚠️ 已公开  6e925ea  3d5b0d7  compose 外置与 gitignore
+> ```
+>
+> → **今天下午之前的所有 fork 定制，早已全部公开。** 只有当天那 8 条没公开。
+> **教训：判定「某 commit 是否在远端」必须用实时 ref** ——
+> 先 `git fetch <remote>`，或直接 `git ls-remote`，**别信本地 `origin/*` 的快照**。
+> 这个坑差点让婉婉给浩瑜一个"还安全"的假保证。
 
 ---
 
