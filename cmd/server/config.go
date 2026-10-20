@@ -266,9 +266,14 @@ type Config struct {
 		AccountShare    map[string]float64 `json:"account_share"`
 		// CreditFloor 积分保底：账号余额低于该值时，对实测收费模型（tier 2）不再
 		// 参与选号——防止收费请求把余额打穿、连免费模型都 402 冷却到次日签到。
-		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
-		// 默认 0 = 关闭；负值钳 0。
+		// tier 0（免费）不受限；tier 1（无观测）按目录倍率分档：≤ 下面的
+		// CreditFloorMaxRate 放行（让便宜新模型跑出第一笔账本），更高的仍拦。
+		// 签到回血越过 floor 自动恢复。默认 0 = 关闭；负值钳 0。
 		CreditFloor int64 `json:"credit_floor"`
+		// CreditFloorMaxRate 保底兜底允许的目录倍率上限（issue #30 / PR #2）。
+		// 0.2 = 便宜模型（x0.11 这类）在触底号上放行入账，x1.62 这类仍按收费拦。
+		// 0 = 严格模式（任何已知正倍率都拦）；负值钳 0。面板「积分保底」档位旁可改。
+		CreditFloorMaxRate float64 `json:"credit_floor_max_rate"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -750,6 +755,11 @@ func (c *Config) normalize() error {
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0
+	}
+	// 保底倍率上限：负值钳 0（= 严格模式，任何已知正倍率都拦）。
+	// 不设非零默认是有意的——这是钱相关开关，升级不该静默放宽既有防护。
+	if c.Pool.CreditFloorMaxRate < 0 {
+		c.Pool.CreditFloorMaxRate = 0
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3

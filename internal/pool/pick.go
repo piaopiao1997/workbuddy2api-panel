@@ -285,7 +285,11 @@ func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time
 	if mc, ok := e.modelCostOf(model, now); ok {
 		return mc.CostPer1k > 0
 	}
-	// 2) 上游目录倍率兜底：无实测观测时用牌价判收费，堵住「无观测 = 放行」漏洞。
+	// 2) 上游目录倍率兜底：无实测观测时用牌价判收费，堵住「无观测 = 全放行」漏洞
+	//    （kimi-k3-1 实案：x1.62 的模型两笔打穿 100 分的号）。
+	//    但全额拦会把便宜的新模型也锁死（issue #30/PR #2：x0.11 的新模型在触底号上
+	//    永远跑不出第一笔账本 → 账本永远学不回来）。故按倍率分档：≤
+	//    creditFloorMaxRate 放行（允许入账），> 该值仍拦；上限 0 = 严格模式（旧行为）。
 	if p.modelRateOf == nil {
 		return false
 	}
@@ -297,7 +301,7 @@ func (p *Pool) floorBlockedForRealmModel(e *entry, model, realm string, now time
 	if err != nil {
 		return false // 倍率非数值（异常形态）：不据此惩罚账号
 	}
-	return v > 0
+	return v > p.creditFloorMaxRate
 }
 
 // pickEarliestExpiryLocked 全冷却兜底：在非禁用的软冷却/熔断账号中选截止最早的一个。

@@ -51,6 +51,11 @@ type Pool struct {
 	// 收费与否的判据见 floorBlockedForModel：本地实测台账优先，缺失时用上游目录
 	// 倍率（modelRateOf 注入）兜底，避免「无观测的高价新模型」绕过保底。
 	creditFloor int64
+	// creditFloorMaxRate 保底兜底允许的目录倍率上限（SetCreditFloorMaxRate 注入）。
+	// 语义：账本无观测（tier 1）时，目录倍率 ≤ 该值 → 放行（让便宜的新模型有机会
+	// 跑出第一笔实测入账）；> 该值 → 仍按收费模型拦（保住 kimi-k3-1 那类事故的防护）。
+	// 0 = 严格模式（任何已知正倍率都拦，即 PR #2 之前的现状）；负值非法保留原值。
+	creditFloorMaxRate float64
 	// modelRateOf 按 (realm, 模型) 查上游目录积分倍率（"0.79" / "" = 未知）。
 	// 由 main 用 upstream.Client.ModelRate 注入——pool 不依赖 upstream 包（避免
 	// 循环依赖与分层破坏），nil 时倍率兜底不生效（退化为仅本地台账判定）。
@@ -288,13 +293,34 @@ func (p *Pool) SetCreditFloor(n int64) {
 
 // SetModelRateOf 注入上游目录积分倍率查表（main 用 upstream.Client.ModelRate 装配）。
 // 供积分保底兜底判定「未实测过的模型是否收费」——本地台账无观测时，不能因为
-// 「没学过」就放行，否则高价新模型会把触底号一次性打穿（kimi-k3-1 实案：
+// 「没学过」就无条件放行，否则高价新模型会把触底号一次性打穿（kimi-k3-1 实案：
 // 全池无观测 → 保底全部放行 → 两笔扣 111 分打穿到 0 并硬冷却到次日 04:00）。
 // fn 可为 nil（清注入）；回调只在持 p.mu 时被调用，不得反向调用 Pool 方法。
 func (p *Pool) SetModelRateOf(fn func(realm, model string) string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.modelRateOf = fn
+}
+
+// SetCreditFloorMaxRate 注入保底兜底允许的目录倍率上限（config pool.credit_floor_max_rate）。
+//
+// 解决两头堵：全额拦（旧行为）会让便宜的新模型在触底号上永远跑不出第一笔账本；
+// 全额放（PR #2）会把 kimi-k3-1 那类高价模型的事故防护一起删掉。按倍率分档后
+// 便宜模型（如 x0.11）能入账，贵的（x1.62）仍拦。0 = 严格模式（等于旧行为）。
+// 负值非法保留原值。
+func (p *Pool) SetCreditFloorMaxRate(v float64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if v >= 0 {
+		p.creditFloorMaxRate = v
+	}
+}
+
+// CreditFloorMaxRate 透出生效的倍率上限（面板/status 用）。0 = 严格模式。
+func (p *Pool) CreditFloorMaxRate() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.creditFloorMaxRate
 }
 
 // SetMaxInFlight 注入单账号最大在途请求数；0 = 不限。负值保留原值。

@@ -227,6 +227,47 @@ func TestCreditFloorBlocksUnobservedPaidModelByCatalogRate(t *testing.T) {
 	}
 }
 
+// TestCreditFloorMaxRateThreshold 保底兜底的倍率上限（issue #30 / PR #2）：
+// 账本无观测时按目录倍率分档——≤ 上限放行（让便宜新模型跑出第一笔账本），
+// > 上限仍拦（保住 kimi-k3-1 那类事故防护）。0 = 严格模式（旧行为）。
+func TestCreditFloorMaxRateThreshold(t *testing.T) {
+	withNoPickGap(t)
+	mkPool := func(maxRate float64) *Pool {
+		p := New("")
+		p.SetCostExploreInterval(0)
+		p.SetCreditFloor(100)
+		p.SetCreditFloorMaxRate(maxRate)
+		p.SetModelRateOf(rates(map[string]map[string]string{
+			"cn": {"cheap-new": "0.11", "pricey-new": "1.62"},
+		}))
+		p.Add(&auth.Auth{UID: "poor"})
+		p.SetCredits("poor", 30, 0) // 触底；刻意不建账本（tier 1）
+		return p
+	}
+
+	// 严格模式（默认 0）：任何已知正倍率都拦 —— 与 PR #2 之前的行为一致。
+	strict := mkPool(0)
+	if a := strict.PickExcludingForRealm(nil, "cheap-new", "cn"); a != nil {
+		t.Fatalf("严格模式下 x0.11 也应被拦（旧行为不变），got %v", a)
+	}
+
+	// 上限 0.2：便宜模型放行入账，贵的仍拦。
+	relaxed := mkPool(0.2)
+	if a := relaxed.PickExcludingForRealm(nil, "cheap-new", "cn"); a == nil {
+		t.Fatal("x0.11 ≤ 上限 0.2，触底号应可选（让新模型跑出第一笔账本）")
+	}
+	if a := relaxed.PickExcludingForRealm(nil, "pricey-new", "cn"); a != nil {
+		t.Fatalf("x1.62 > 上限 0.2，应仍按收费拦，got %v", a)
+	}
+
+	// 负值非法：保留原值不写入。
+	neg := mkPool(0.2)
+	neg.SetCreditFloorMaxRate(-1)
+	if got := neg.CreditFloorMaxRate(); got != 0.2 {
+		t.Errorf("负值应被忽略（保留 0.2），got %v", got)
+	}
+}
+
 // TestCreditFloorUnobservedFreeModelStillAllowed 目录判免费的无观测模型照常放行：
 // 兜底只拦收费，不得把「没学过」一刀切禁掉（否则新上的免费模型没人接）。
 func TestCreditFloorUnobservedFreeModelStillAllowed(t *testing.T) {

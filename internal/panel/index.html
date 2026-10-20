@@ -1179,6 +1179,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <label class="fld"><span class="lb">积分保底</span>
                 <input name="credit_floor" type="number" min="0" placeholder="100">
                 <span class="hint">余额低于此值不再接实测收费模型（保住免费模型可用）；0 关闭</span></label>
+              <label class="fld"><span class="lb">保底倍率上限</span>
+                <input name="credit_floor_max_rate" type="number" min="0" step="0.01" placeholder="0">
+                <span class="hint">无实测账本时，目录倍率 ≤ 此值才放行（让便宜新模型跑出第一笔账本）；0 = 任何已知收费倍率都拦</span></label>
               <label class="fld"><span class="lb">快过期路由窗口</span>
                 <input name="expiring_soon" placeholder="168h">
                 <span class="hint">窗口内有快过期批次的账号选号权重 ×3（不排序、与金额无关）；0 关闭</span></label>
