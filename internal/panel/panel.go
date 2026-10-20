@@ -861,8 +861,15 @@ func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 }
 
 // accountRemove 移除账号：先出池（立即落盘 state），再删 auth 文件。
+//
+// 删前先落一份 state 取证备份（见 pool.BackupStateTo）：移除是不可逆的，
+// 而 state.json 是唯一记录 disabled/reason/cool_kind/session_dead_fails 的地方。
+// 备份失败不阻断删除（用户意图明确），只记一行 WARN。
 func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	uid := r.PathValue("uid")
+	if _, err := p.cfg.Pool.BackupStateTo("remove"); err != nil {
+		log.Printf("WARN: panel: remove uid=%s 取证备份失败（继续删除）: %v", uid, err)
+	}
 	a := p.cfg.Pool.Remove(uid)
 	if a == nil {
 		writeErr(w, http.StatusNotFound, "account not found")

@@ -4,10 +4,13 @@ package pool
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -312,6 +315,86 @@ func (p *Pool) notePersistFail(err error) {
 		log.Printf("pool: state.json 连续落盘失败 %d 次: %v", p.persistFails, err)
 	}
 	p.persistFails++
+}
+
+// stateBackupKeep 保留多少份取证备份（超出按 mtime 删最旧）。
+// 取 20：删号是低频操作，20 份足够覆盖一周的复盘需求，又不至于把 data/ 堆满。
+const stateBackupKeep = 20
+
+// BackupStateTo 把当前内存状态另存一份到 `<stateFp>.bak-<ts>-<reason>`。
+//
+// 为什么需要它（2026-10-20 实案）：面板「移除账号」直接改写 state.json，
+// 一旦删完想复盘「这号当时是 disabled 还是健康、reason 写了什么」，就再无处可查。
+// 本次只能靠 8 天前本机的一份 auths 快照反推名单元 —— 不该依赖这种运气。
+//
+// 语义：只做快照，不改任何状态；失败只返回 error，由调用方决定是否中断。
+// 理由串会做字符白名单过滤（只留字母数字与连字符），避免拼出奇怪文件名。
+func (p *Pool) BackupStateTo(reason string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.stateFp == "" {
+		return "", errors.New("state file not configured")
+	}
+	sf := p.stateOverviewLocked()
+	raw, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	safe := make([]rune, 0, len(reason))
+	for _, r := range reason {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+			safe = append(safe, r)
+		}
+	}
+	suffix := string(safe)
+	if suffix == "" {
+		suffix = "manual"
+	}
+
+	// 秒级时间戳下同一秒内多次备份会互相覆盖（批量删号时可能发生），
+	// 因此撞名时追加序号，保证每次调用都留下一份独立快照。
+	base := fmt.Sprintf("%s.bak-%s-%s", p.stateFp, time.Now().Format("20060102-150405"), suffix)
+	dst := base
+	for i := 1; i < 1000; i++ {
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			break
+		}
+		dst = fmt.Sprintf("%s-%d", base, i)
+	}
+	if dir := filepath.Dir(dst); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		return "", err
+	}
+	p.pruneStateBackupsLocked()
+	return dst, nil
+}
+
+// pruneStateBackupsLocked 只保留最近 stateBackupKeep 份备份。调用方须持 p.mu。
+// 失败静默（清理是尽力而为，不该让备份本身失败）。
+func (p *Pool) pruneStateBackupsLocked() {
+	matches, err := filepath.Glob(p.stateFp + ".bak-*")
+	if err != nil || len(matches) <= stateBackupKeep {
+		return
+	}
+	type item struct {
+		path string
+		mod  time.Time
+	}
+	items := make([]item, 0, len(matches))
+	for _, m := range matches {
+		if st, err := os.Stat(m); err == nil {
+			items = append(items, item{m, st.ModTime()})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].mod.After(items[j].mod) })
+	for _, it := range items[stateBackupKeep:] {
+		_ = os.Remove(it.path)
+	}
 }
 
 // stateOverviewLocked 收集当前内存状态为 stateFile（供落盘 + 快照镜像复用）。调用方必须已持 p.mu。
