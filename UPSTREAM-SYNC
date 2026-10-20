@@ -1,0 +1,161 @@
+# WB2API 上游同步台账
+
+> fork `piaopiao1997/workbuddy2api-panel`（分支 `ops/daofaziran`）
+> 上游 `misakano7545/workbuddy2api-panel`（`upstream` remote）
+>
+> **为什么需要这份文件**：`git cherry-pick` 会把副本永久挂在 `upstream/main..HEAD` 里。
+> 同步过 6 条之后，`git log upstream/main..HEAD` 显示"领先 14"，可真正属于我们的只有 **8 条**，
+> 其余 6 条是副本伪装的。没有这份台账，每次评审都得靠记忆剔除它们 —— 噪音只会越滚越大。
+>
+> **配套的体检脚本**：`~/ops/upstream-triage.sh`（在本仓库根目录执行，只读）。
+> 它会自动把上游差量分成「噪音 / 运行时」两堆，并预判每条撞哪些 fork 改动文件。
+> 台账里出现过的上游 SHA 会被自动标记为 `[已同步]` 并默认剔除。
+
+---
+
+## 判据（浩瑜 2026-10-20 定）
+
+不看「这条改的现象在我这出现过几次」，只看两件事：
+
+1. **触发是否依赖流量** —— 依赖的话，样本量 0 没有信息量，按最坏情况算期望损失
+2. **失败是否可逆** —— 全池禁号这类不可逆的，概率再低也要跟
+
+> 反面教训：2026-10-20 婉婉曾以「旧日志里 11158/14003/渠道校验 全 0 次」论证不必跟，
+> 被浩瑜推翻：**这些是调用时概率触发的，没撞上不等于不会撞上**。当天傍晚就实测到一个号
+> 被上游判 `11140 账号存在异常行为，已受限` —— 正是要跟的那批修复治的病。
+
+## 同步纪律
+
+- cherry-pick **一律加 `-x`**：`git cherry-pick -x <SHA>` —— 提交正文自动记下来源 SHA，台账自动就位
+- **提交前先看 `git config user.name/email`**。反面案例：一度用 `wanny <wanny@local>` 提交，
+  邮箱根本不存在，PR 被 merge 也拿不到 contributor 身份。
+  修正姿势：`git commit --amend --reset-author --no-edit`
+  （⚠️ `git cherry-pick --reset-author` 在无编辑器环境下会**静默失败**，留下一个没落的分支；
+  `GIT_AUTHOR_NAME` 环境变量也救不了 —— cherry-pick 会用原 author 覆盖它）
+- **推大江理前的安全审查**（两步，缺一不可，因为 fork 是**公开**的）：
+  ```bash
+  git log --all --pretty=format: --name-only --diff-filter=A | sort -u | grep -iE "auths/|\.env|config\.json|\.pem|\.key$|secret"
+  git log --all --format="%h %s %b" | grep -inE "token|password|secret|api[_ ]?key|-----BEGIN"
+  ```
+- **推送凭据**（这台没配 GitHub SSH key，只能走 HTTPS；令牌不进命令行、不落盘）：
+  ```bash
+  cat ~/.secrets/github/piaopiao1997.token | ssh tx '
+    set -e; read -r T
+    CF=$(mktemp /tmp/ghcred.XXXXXX)
+    trap "shred -u -z \"$CF\" 2>/dev/null || true" EXIT
+    chmod 600 "$CF"; printf "https://piaopiao1997:%s@github.com\n" "$T" > "$CF"; T=""; unset T
+    cd ~/workbuddy2api-panel-new
+    git -c credential.helper="store --file=$CF" push -u origin <branch>'
+  ```
+- **先看依赖**：一条 fix 引用了「本次才新增」的包/文件时，必须连那条依赖一起 pick。
+  反面案例：`2999a8d` 单独 pick 编译失败 `no required module provides package .../internal/safefile`
+- 每次同步完**回填下表**
+
+---
+
+## 同步记录
+
+| 同步日期 | 上游 SHA | 本地 SHA | 是否跟 | 理由（按上面的判据） |
+|---|---|---|---|---|
+| 2026-10-20 | `8193c1b` | `b2064c4` | 跟 | 识别 11158 模型权限错误 —— 调用侧概率触发 |
+| 2026-10-20 | `bde6da1` | `6de39df` | 跟 | #231 国际版全池「渠道校验」禁号 —— **不可逆**，再低概率也要跟 |
+| 2026-10-20 | `d9b92b2` | `c916c3e` | 跟 | 出站指纹 7 处修正 —— 同上；本地已实测存在被禁的号 |
+| 2026-10-20 | `b582215` | `342ac78` | 跟 | 14003「模型繁忙」独立短窗口（不再套 600s→2h） |
+| 2026-10-20 | `2999a8d` | `3bbbdf9` | 跟 | 启动补跑同一天只跑一轮，重启不再重打上游 |
+| 2026-10-20 | `4356a34` | `db3f066` | 跟（依赖） | safefile fsync + 坏文件回退 —— `2999a8d` 依赖它引入的新包 |
+
+**未跟记录**（省得下次重复评审）
+
+| 日期 | 上游 SHA | 结论 | 理由 |
+|---|---|---|---|
+| 2026-10-20 | （约 58 条） | 永久忽略 | `scripts/autobot.py` / `.github/workflows` / `AutoBot.yml` / `scripts/acp_run.py` —— 上游自家流水线玩具，与运行时无关（占全部差量 83%） |
+| 2026-10-20 | `e0512bc` | 不跟 | 企业不限量哨兵不再污染权重分母 —— **本地 350 号 `enterpriseId` 全空串**，零企业号 |
+| 2026-10-20 | `58262f3` | 不跟 | budget 双闸 —— 本地 `budget.daily_credit_limit` 未启用 |
+| 2026-10-20 | `530f1df` `426549e` | 暂缓 | 券码任务，非刚需 |
+
+---
+
+## 已提 PR（outbound）
+
+| 日期 | PR | 分支 | 内容 | 状态 |
+|---|---|---|---|---|
+| 2026-10-20 | [#41](https://github.com/misakano7545/workbuddy2api-panel/pull/41) | `pr/pool-scheduler-fixes` | pool 兜底选号漏查 reserve + scheduler 补偿/礼包金额误报与重复 claim（2 commits / 5 files / +234 −18） | open |
+
+**提 PR 的筛选原则**：只提「别人用也受益、我们不损失的东西」——纯 bugfix / 部署改进。
+**差异化能力不提**（理由见下「代理池为什么不提」）。
+
+## 代理池为什么不提（浩瑜 10-20 采纳）
+
+代理池这套（per_account 单号单出口代理 + 健康度熔断）是**业务差异化能力**，不是通用 bugfix：
+
+1. 提上去等于把整套东西免费发给同行，**一次公开就收不回**。
+2. **公地悲剧**：同类玩法一旦成为标配并大规模铺开，厂商一定会针对性治理
+   （数据中心 IP / IP 信誉 / 出口地理跳变）。用的人越多越不灵 —— 等于稀释自己的优势。
+3. **性价比已经被工具改变了**：`upstream-triage.sh` 已把每次追新的评审从 30–40 分钟压到 30 秒，
+   为省剩余那点冲突处理时间而捐核心资产，交换不对称。
+
+> 🔴 **但要注意**：`3f78990`（代理池初版）**早已躺在这个公开 fork 的 `ops/daofaziran` 分支上**，
+> 全世界可读（`9a98a29` / `744b428` 两条增强未推送，还在本地）。
+> 这个 fork 的 `private` = **False**。是否清理远端那条分支，待定。
+
+---
+
+## fork 真正自有的提交（8 条）
+
+> `git log upstream/main..HEAD` 里如果看到别的，那都是 cherry-pick 副本，查上表对号入座。
+
+| SHA | 内容 | 撞上的文件（= 持久冲突面） |
+|---|---|---|
+| `3d5b0d7` | 保留道法自然的 compose + 忽略敏感备份 | `docker-compose.yml`、`.gitignore` |
+| `6e925ea` | compose 部署参数外置到 `.env` | `docker-compose.yml` |
+| `3f78990` | 出站代理池与控制面板 | `cmd/server/main.go`、`cmd/server/config.go`、`internal/panel/*`、`internal/upstream/client.go`、`transport.go` |
+| `9a98a29` | 代理池自动解绑 / 最少分配 / 全路径路由 | `internal/upstream/headers.go`、`mp_events.go`、`tasks.go`、`internal/pool/{pool,cooldown,transition}.go`、`internal/scheduler/scheduler.go` |
+| `744b428` | 代理池熔断接线（Report 进请求出口） | `internal/upstream/{client,transport}.go` |
+| `44e2ebb` | 删号前自动落 state 取证备份 + `cmd/probechat` | `internal/panel/panel.go`、`internal/pool/persist.go` |
+| `b3c5c2b` | 补偿/礼包不再把「可领额度」冒充「本次到账」 | `internal/scheduler/{compensation,scheduler}.go` |
+| `2971e04` | 全冷却兜底路径补检查 `reserve_credits` | `internal/pool/pick.go` |
+
+### 为什么每次同步都容易撞冲突
+
+把上面「撞上的文件」跟上游最活跃的文件叠起来看就明白了：
+
+```
+上游近期热点（条数）：handler.go 9  |  upstream/client.go 6  |  cmd/server/main.go 6
+                    panel/panel.go 5  |  cmd/server/config.go 5  |  upstream/headers.go 3
+我们 fork 的自有改动：同样压在 client.go / headers.go / main.go / panel.go 上
+```
+
+**重叠的那几支是全 repetitively 改动的同一个文件** —— 结构性冲突，不是运气问题。
+
+### 治本方向（待浩瑜定：要不要提 PR 回上游）
+
+这 4 条是**纯 bugfix / 部署改进**，上游大概率愿意收；收了之后 fork 只剩代理池那 3 条定制：
+
+- `2971e04` reserve 兜底漏洞（纯 bugfix）
+- `b3c5c2b` 补偿/礼包冒充到账（纯 bugfix）
+- `6e925ea` compose 参数外置 `.env`（部署改进）
+- `3d5b0d7` 保护 compose + 忽略敏感备份（微小）
+
+再往后，最大的残余冲突源是代理池对 `upstream/client.go` / `transport.go` 的改造
+（`3f78990` + `744b428`）。若能改成**通过接口/钩子注入**而不改这两个文件，
+持久冲突面基本就清零了 —— 这是个中期重构，不急，先攒着。
+
+---
+
+## 同步后的必做检查
+
+```
+cd ~/workbuddy2api-panel-new
+bash ~/ops/upstream-triage.sh        # 先看清差量
+git cherry-pick -x <SHA>             # 一律加 -x
+# 编译 / 单测（本机 go 是 1.18.1，读不动 go 1.22.5 的 go.mod，得进容器跑）：
+sudo docker run --rm --network=host -v "$PWD":/src \
+  -v /tmp/gocache2:/root/.cache/go-build -v /tmp/gomod2:/go/pkg/mod -w /src \
+  golang:1.23-alpine sh -c "go build ./... && go test ./... -count=1"
+# 确认没有引入新环境变量 / 配置字段：
+git diff HEAD~ -- ':!*_test.go' | grep -E '^\+.*os\.(Getenv|LookupEnv)'
+diff <(git show HEAD~:config.example.json) config.example.json
+# 发布前：
+sudo docker tag <当前在跑的 image> workbuddy2api-panel-wb2api:rollback-<日期>
+# 别指望「stop + rename 留旧容器」—— compose up -d 会把它 Recreate 掉
+```
