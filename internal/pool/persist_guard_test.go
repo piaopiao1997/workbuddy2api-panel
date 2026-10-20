@@ -32,7 +32,7 @@ func TestCorruptStateFileLogsAndKeepsFile(t *testing.T) {
 	if _, ok := p.Status("u1"); ok {
 		t.Fatal("损坏的 state.json 不应被当成有效状态加载")
 	}
-	if !strings.Contains(buf.String(), "state.json 解析失败") {
+	if !strings.Contains(buf.String(), "state.json 不可用") {
 		t.Fatalf("损坏状态被静默丢弃，日志=%q", buf.String())
 	}
 	if _, err := os.Stat(fp); err != nil {

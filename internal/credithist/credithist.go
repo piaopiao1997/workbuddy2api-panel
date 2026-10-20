@@ -14,12 +14,16 @@ package credithist
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
 // maxDelta 单次变动的留痕上限（对齐参考实现的 _MAX_DELTA）：超过它基本可断定是
@@ -77,9 +81,9 @@ func (l *Ledger) load() {
 	if l.path == "" {
 		return
 	}
-	raw, err := os.ReadFile(l.path)
+	raw, err := safefile.Read(l.path, nil)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, fs.ErrNotExist) {
 			log.Printf("[credithist] 读取 %s 失败（从空账本开始）: %v", l.path, err)
 		}
 		return
@@ -185,12 +189,7 @@ func (l *Ledger) write(raw []byte) {
 			return
 		}
 	}
-	tmp := l.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("[credithist] 写临时文件失败: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, l.path); err != nil {
+	if err := safefile.WriteKeep(l.path, raw, 0o600); err != nil {
 		log.Printf("[credithist] 原子替换失败: %v", err)
 	}
 }
