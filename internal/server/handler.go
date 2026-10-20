@@ -168,6 +168,9 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("POST /messages", h.withAnthropicAuth(h.messages))
 	// 官方 agenttool 联网检索的网关透传（非对话端点，与 images 同套取号/失败处置）。
 	h.mux.HandleFunc("POST /v1/search", h.withAuth(h.search))
+	// POST /v2/chat/busy：官方客户端的「模型忙」预检（国区上游 200、国际版上游 404，
+	// 见 busy.go 文件头）。本地按池台账算，不打上游。
+	h.mux.HandleFunc("POST /v2/chat/busy", h.withAuth(h.chatBusy))
 	h.mux.HandleFunc("GET /v1/models", h.withAuth(h.models))
 	h.mux.HandleFunc("GET /status", h.withAuth(h.status))
 	h.mux.HandleFunc("GET /healthz", h.healthz)
