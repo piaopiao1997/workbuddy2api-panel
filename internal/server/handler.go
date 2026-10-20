@@ -67,6 +67,10 @@ type Config struct {
 	// 裸用/测试路径经 loadLive() 归一化后使用）。
 	ModelsHidden []string
 
+	// ModelsAliases 模型映射原始条目（config models.aliases，"客户端名=真实名"；
+	// issue #30；Live 为 nil 的裸用/测试路径经 loadLive() 归一化后使用）。
+	ModelsAliases []string
+
 	// Usage 逐请求用量记录器（可选；nil = 不记录）。
 	Usage *usage.Recorder
 
@@ -99,7 +103,20 @@ func (h *Handler) loadLive() livecfg.Snapshot {
 		SoftCooldown:     h.cfg.SoftCooldown,
 		RecordClientInfo: h.cfg.RecordClientInfo,
 		HiddenModels:     livecfg.NormalizeHiddenModels(h.cfg.ModelsHidden),
+		ModelAliases:     livecfg.NormalizeModelAliases(h.cfg.ModelsAliases),
 	}
+}
+
+// modelAlias 查 aliases 映射（issue #30）：客户端名（剥 realm 前缀后的裸名，
+// 大小写不敏感）命中映射 → 返回真实模型名（原样，可再带 realm 前缀跨域指向）；
+// 未命中 → ("", false)。查找键与 livecfg.NormalizeModelAliases 的归一化口径配对：
+// realm+":"+小写裸名。
+func (h *Handler) modelAlias(realm, bare string) (string, bool) {
+	if bare == "" {
+		return "", false
+	}
+	target, ok := h.loadLive().ModelAliases[strings.ToLower(realm)+":"+strings.ToLower(bare)]
+	return target, ok
 }
 
 // softCooldown 返回当前生效的软冷却基数（热改优先，<=0 回退默认）。
@@ -675,13 +692,41 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(peek.Model)
+
+	// models.aliases 映射（issue #30）：客户端名命中映射 → 出站/选号/effort 全部
+	// 改用目标名，realm 也按目标重解析（别名值可带前缀跨域指向）。
+	// 放在 hidden 检查**之前**：被映射到的目标仍受黑名单约束，别名不能绕过隐藏。
+	// 出站 body 同步重写顶层 model（prepareBody 的 normalizeModelName 只剥前缀，
+	// 不认识别名——名字必须在这里就换掉）。未命中 → body 一个字节不动（现状零回归）。
+	// modelEcho 非空 = 本请求走了映射，响应侧（SSE 帧 / 聚合体）把 model 覆写回
+	// 客户端原发名——严格校验「响应 model == 请求 model」的客户端不会当场报错。
+	// routeModel = 选号/粘性/账本使用的模型名（映射后为真实名，可带 realm 前缀）。
+	modelEcho := ""
+	routeModel := peek.Model
+	if aliasTarget, aliased := h.modelAlias(realm, bareModel); aliased && aliasTarget != "" {
+		var obj map[string]any
+		if json.Unmarshal(body, &obj) == nil {
+			if cur, isStr := obj["model"].(string); isStr && cur == peek.Model {
+				obj["model"] = aliasTarget
+				if nb, merr := json.Marshal(obj); merr == nil {
+					body = nb
+					realm, bareModel = resolveModel(aliasTarget)
+					modelEcho = peek.Model
+					routeModel = aliasTarget
+					log.Printf("INFO: [server] model alias applied: %s -> %s", peek.Model, aliasTarget)
+				}
+			}
+		}
+	}
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
 	}
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
-	st := newChatStat(time.Now(), peek.Model, peek.Stream, h.budget)
+	// routeModel：映射请求显示真实路由名（别名 INFO 行已记录 客户端名 -> 真实名，
+	// 两行合看即全链路；流水行与账本/上游口径一致，运维排查不用做心算翻译）。
+	st := newChatStat(time.Now(), routeModel, peek.Stream, h.budget)
 	if tr := requestTraceFrom(r); tr != nil {
 		tr.stat = st
 		// 来源在 ServeHTTP 入口采集（此时才知道开关与请求头），此处转交给统计对象，
@@ -725,7 +770,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
 		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
-		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, peek.Model); ok {
+		// 用 routeModel 而非 peek.Model（issue #30）：映射后必须按真实模型的
+		// 可用性口径判绑定，别名名不在任何账本里。
+		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, routeModel); ok {
 			stickyUID = uid
 		}
 	}
@@ -1216,7 +1263,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			repair := upstream.NewMarkupRepair(declaredTools, true)
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
 				return h.hintContext(bareModel, reqHasImage)
-			}), upstream.WithMarkupRepair(repair))
+			}), upstream.WithMarkupRepair(repair), upstream.WithModelEcho(modelEcho))
 			// 首帧否决（见 upstream.HeadVetoError）：网关一个字节都没写出，这次尝试对
 			// 客户端完全无痕——按错误类型处置账号后换号，而不是把「HTTP 200 + error 帧」
 			// 透给客户端（SSE 发过字节就改不了状态码，此前只能这么兜底）。
@@ -1367,6 +1414,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		ud := usageDeltaFromResponse(resp)
 		credit, total, hasCredit := usageCreditTotal(resp)
 		recordAttempt(acct.UID, ud, credit, hasCredit, attemptStarted, 0)
+		// 模型名回显（issue #30，与流式 WithModelEcho 同语义）：聚合体的 model
+		// 覆写回客户端原发名，严格校验客户端不当场报错。
+		if modelEcho != "" {
+			resp["model"] = modelEcho
+		}
 		writeJSON(w, http.StatusOK, resp)
 		st.status = http.StatusOK
 		st.outcome = reqlog.OutcomeSuccess

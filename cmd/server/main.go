@@ -310,6 +310,7 @@ func main() {
 		SanitizeFingerprints: cfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(cfg.Models.Hidden),
+		ModelAliases:         livecfg.NormalizeModelAliases(cfg.Models.Aliases),
 	})
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
@@ -418,7 +419,9 @@ func main() {
 		GlobalEnabled: cfg.Global.Enabled,
 		// 模型黑名单原始条目；运行期以 livecfg 快照为准（热生效），此处供
 		// Live 为 nil 的裸用/测试路径。
-		ModelsHidden:   cfg.Models.Hidden,
+		ModelsHidden: cfg.Models.Hidden,
+		// 模型映射原始条目（issue #30）；同上，运行期以 livecfg 快照为准。
+		ModelsAliases:  cfg.Models.Aliases,
 		AdminEnabled:   cfg.Admin.Enabled,
 		MetricsEnabled: cfg.Metrics.Enabled,
 		Tasks:          sch,
@@ -685,6 +688,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		SanitizeFingerprints: newCfg.Features.SanitizeBlacklistFingerprints,
 		RecordClientInfo:     newCfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(newCfg.Models.Hidden),
+		ModelAliases:         livecfg.NormalizeModelAliases(newCfg.Models.Aliases),
 	})
 	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
 	// 代理池热生效：更新出口列表与分配策略，无需重启容器

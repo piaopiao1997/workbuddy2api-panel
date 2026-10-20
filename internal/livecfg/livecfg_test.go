@@ -51,3 +51,61 @@ func TestNormalizeHiddenModels(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeModelAliases 模型映射归一化（issue #30）：
+//   - nil/空/无 "="/空键/空值/自我映射 → 丢弃
+//   - 键小写化（查找端同口径，大小写不敏感）
+//   - 裸名键 → 两域都生效；"cn:"/"global:" 前缀键 → 只在该域生效
+//   - 值原样保留（可带 realm 前缀跨域指向）
+func TestNormalizeModelAliases(t *testing.T) {
+	if got := NormalizeModelAliases(nil); got != nil {
+		t.Errorf("nil → %v, want nil", got)
+	}
+	if got := NormalizeModelAliases([]string{}); got != nil {
+		t.Errorf("empty → %v, want nil", got)
+	}
+	if got := NormalizeModelAliases([]string{"no-equals", "  ", "", "=x", "y=", "self=self"}); got != nil {
+		t.Errorf("all invalid → %v, want nil", got)
+	}
+
+	// 裸名键：两域都生效，键小写化
+	got := NormalizeModelAliases([]string{"My-GPT=glm-5.2"})
+	for _, k := range []string{"cn:my-gpt", "global:my-gpt"} {
+		if got[k] != "glm-5.2" {
+			t.Errorf("bare key: %q = %q, want glm-5.2 (%v)", k, got[k], got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("bare key: got %d entries %v, want 2", len(got), got)
+	}
+
+	// 域前缀键：只在该域生效；值带前缀原样保留（跨域指向）
+	got = NormalizeModelAliases([]string{"cn:opus=global:gpt-5.4"})
+	if got["cn:opus"] != "global:gpt-5.4" {
+		t.Errorf("scoped key: cn:opus = %q, want global:gpt-5.4", got["cn:opus"])
+	}
+	if _, ok := got["global:opus"]; ok {
+		t.Error("scoped key: must not register global realm")
+	}
+
+	// 键值两侧空白裁掉；值只在 "=" 第一次出现处切分
+	got = NormalizeModelAliases([]string{"  alias1 =glm-5.2  "})
+	if got["cn:alias1"] != "glm-5.2" {
+		t.Errorf("trim: cn:alias1 = %q, want glm-5.2 (%v)", got["cn:alias1"], got)
+	}
+}
+
+// TestModelAliasesHotReload 快照整体替换后立即生效（面板保存语义）。
+func TestModelAliasesHotReload(t *testing.T) {
+	h := New(Snapshot{ModelAliases: NormalizeModelAliases([]string{"a=glm-5.2"})})
+	if _, ok := h.Load().ModelAliases["cn:a"]; !ok {
+		t.Fatal("初始快照应含 cn:a")
+	}
+	h.Store(Snapshot{ModelAliases: NormalizeModelAliases([]string{"b=deepseek-v3"})})
+	if _, ok := h.Load().ModelAliases["cn:a"]; ok {
+		t.Error("替换快照后旧映射必须消失（整体覆盖语义）")
+	}
+	if _, ok := h.Load().ModelAliases["cn:b"]; !ok {
+		t.Error("替换快照后新映射应生效")
+	}
+}

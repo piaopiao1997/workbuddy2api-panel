@@ -578,7 +578,17 @@ func Stream(w http.ResponseWriter, r io.Reader) error {
 type StreamOption func(*streamOptions)
 
 type streamOptions struct {
-	markup *MarkupRepair
+	markup    *MarkupRepair
+	echoModel string
+}
+
+// WithModelEcho 强制所有出站帧的顶层 model 字段为 name（issue #30：模型映射）。
+//
+// 客户端经别名（models.aliases）点名时，上游帧里回显的是真实模型名；严格校验
+// 「响应 model == 请求 model」的客户端会当场报错。挂上后逐帧覆写，客户端看到的
+// 永远是它自己发出去的名字。name 为空 = 不挂（零改动）。
+func WithModelEcho(name string) StreamOption {
+	return func(o *streamOptions) { o.echoModel = name }
 }
 
 // WithMarkupRepair 注册「模型原生工具调用标记」修复器（见 dsml.go）。
@@ -651,6 +661,12 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	// 已用过的最大 tool_call index（供标记修复接续编号）。
 	// fallback 是规范化失败时的兜底原文（与修复前「marshal 失败即原样透传」一致）。
 	writeChunk := func(obj map[string]any, fallback string) error {
+		// 模型名回显覆写（issue #30）：别名请求时把帧的 model 换回客户端原发名，
+		// 严格校验「响应 model == 请求 model」的客户端不会当场报错。echoModel 空 =
+		// 零改动（未映射请求的常态路径）。
+		if o.echoModel != "" {
+			obj["model"] = o.echoModel
+		}
 		// 先按 index 收敛 tool_calls name（每 index 仅首片保留，后续分片删 name 键），再规范化透传。
 		stripToolCallNames(obj, toolCallSeen)
 		// id 续传：首帧非空真实 id 缓存；后续帧缺 id / 空 id 一律用缓存值，

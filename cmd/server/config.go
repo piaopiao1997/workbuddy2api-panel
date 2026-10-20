@@ -206,6 +206,14 @@ type Config struct {
 		// 生效点：GET /v1/models 列表过滤 + POST /v1/chat/completions 点名拒绝
 		// （只藏列表不够——知道名字仍可硬调）。面板保存后经 livecfg 热生效，无需重启。
 		Hidden []string `json:"hidden"`
+		// Aliases 模型映射表（issue #30）："客户端名=真实模型名" 条目数组，与 Hidden
+		// 同存储形态（数组整体覆盖，面板删条目无需重启）。键：裸名=两域生效，
+		// "cn:x"/"global:x"=只在该域生效；键大小写不敏感。值可带 realm 前缀实现跨域
+		// 指向（"my-glm": "global:glm-5.2"）。生效点：chat 请求解析 realm/裸名之后、
+		// 隐藏检查/选号/出站 body 之前整体替换；被映射到的目标仍受 Hidden 约束
+		// （别名不能绕过黑名单）。响应/日志/账本按实际生效模型名口径。
+		// 面板保存后经 livecfg 热生效，无需重启。
+		Aliases []string `json:"aliases"`
 	} `json:"models"`
 
 	Prompt struct {

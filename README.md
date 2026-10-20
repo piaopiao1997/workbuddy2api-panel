@@ -404,6 +404,7 @@ curl -s http://localhost:7863/v1/responses \
 | `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 现状 `CLI/2.63.2 CodeBuddy/2.63.2`）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |
 | `models.hidden` | `[]` | 模型黑名单：`["deepseek-pro"]` 裸名隐藏两域，`["cn:legacy-model"]` / `["global:x"]` 只隐藏该域。**列表不列 + 点名调用直接拒绝**（`/v1/models` 过滤、`/v1/chat/completions` 与 `/v1/images/*` 拒绝）——只藏列表不够，知道名字仍可硬调。面板「模型黑名单」（逗号分隔）保存后**热生效** |
+| `models.aliases` | `[]` | 模型映射（issue #30）：`["claude-opus-4=glm-5.2"]`，客户端只能填固定模型名的 agent 靠它落到真实模型。键大小写不敏感；裸名键两域生效，`cn:`/`global:` 前缀键只在该域生效；值可带前缀跨域指向（`"my-gpt=global:gpt-5.4"`）。映射在**黑名单检查之前**完成（别名不能绕过 `models.hidden`），出站 body / 选号 / 粘性 / 账本全用真实名，响应 `model` 回显客户端原发名（严格校验模型名的客户端不会报错）。面板「模型映射」（逗号分隔）保存后**热生效** |
 | `prompt.mode` | `custom` | 系统提示词模式：`custom` = 网关用自有提示词替换客户端 system；`append` = 开头连续 system/developer 块后插网关提示词（既有消息逐字不动）；`passthrough` = 透传客户端原始 system（降级重试仍切中性提示词） |
 | `prompt.file` | 空 | 提示词文件路径；空 = 内置默认（约 2KB）；路径非空但不可读 → 启动报错 |
 | `upstash.url` / `upstash.token` | 空 | 空 = 纯内存模式（Noop 降级，功能照常） |
@@ -727,7 +728,7 @@ http://127.0.0.1:7863/panel/
 | **运行日志** | **请求记录表**（时间 / 结果 / 模型 / 账号 / **来源 IP** / **User-Agent** / 耗时 / Token / 积分 / 请求 ID），支持关键词与结果筛选、读取条数，以及 今天 / 近 24 小时 / 近 7 天 / **自定义区间**等**时间范围**查询（由归档侧按时间取，不是筛已拉取的条目）+ 最近 500 行服务日志（按任务 / 对话 / 系统分频道，可开关自动滚动），并新增 **积分历史**（每次真实查到余额与上次比对，变动即留痕） |
 
 **配置热生效**：保存配置后，`api_key`、`cooldown.soft_rate`、`features.sanitize_blacklist_fingerprints`、
-`models.hidden`、`logging.request_client_info`、`pool.*`（熔断/在途/权重/保底倍率上限）、`schedule.*`（时点/开关/余额刷新间隔）**立即生效，无需重启**；
+`models.hidden`、`models.aliases`、`logging.request_client_info`、`pool.*`（熔断/在途/权重/保底倍率上限）、`schedule.*`（时点/开关/余额刷新间隔）**立即生效，无需重启**；
 涉及进程装配期依赖的字段（`listen`、`auth_dir`、`state_file`、`upstream.*`、`upstash.*`、`session_sticky.ttl`、`admin`、`metrics`、`alerting`）
 保存后会提示"需重启进程生效"。配置写入采用「深合并且原子替换」：只更新面板表单覆盖的键，
 用户手写的未知键与其余字段原样保留。
