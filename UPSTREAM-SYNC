@@ -24,24 +24,32 @@
 > 被浩瑜推翻：**这些是调用时概率触发的，没撞上不等于不会撞上**。当天傍晚就实测到一个号
 > 被上游判 `11140 账号存在异常行为，已受限` —— 正是要跟的那批修复治的病。
 
-## 🗂 remote 结构（10-21 起，默认安全）
+## 🗂 remote 结构（最终版 · 2026-10-21 00:37）
 
 ```
-origin   → piaopiao1997/wb2api-ops            (private)  ← 日常 push 目标
-public   → piaopiao1997/workbuddy2api-panel   (public fork)  ← 只用来提 PR
+origin   → piaopiao1997/workbuddy2api-panel   (public fork)  ← 日常 push 目标 = 全量备份
 upstream → misakano7545/workbuddy2api-panel   (上游)
 ```
 
-**为什么把 `origin` 让给私有仓库**：`git push` 不带参数时落到 `origin`。
-让默认目标是私有，就**不可能手滑把运维代码推上公开**；要推公开必须显式写 `public`。
+**浩瑜原话**：「不用那么费劲，就在自己 fork 里当全量备份吧，**不用害怕的** ——
+代理池这东西想到的人肯定想到了」。
 
-分支的 upstream 归属：
+→ 因此**不做「私有一份 + 公开一份」的双轨**，直接让公开 fork 承担全量备份。
+→ 这个判断成立：代理池不是壁垒（思路公开并不损失什么），真正的壁垒是**号池规模与运营**。
+→ 附带建的 `piaopiao1997/wb2api-ops`（private）**保留为静态镜像**，不挂 remote、不参与日常操作。
+   用途：万一哪天想在非公开环境里翻历史，那里有一份 00:35 的快照（`d33d44e` 同源）。
 
-| 分支 | 跟踪 | 含义 |
+分支 tracking：
+
+| 分支 | 跟踪 | 说明 |
 |---|---|---|
-| `ops/daofaziran` | `origin/ops/daofaziran`（私有） | 运维主分支，`git push` 即备份 |
-| `main` | `origin/main`（私有） | 上游 main 的镜像 |
-| `pr/<名字>` | `public/pr/<名字>`（公开） | 提 PR 的临时分支，**用完即删** |
+| `ops/daofaziran` | `origin/ops/daofaziran`（公开） | 运维主分支，`git push` 即刻全量备份 |
+| `main` | `origin/main` | 上游 main 的镜像 |
+| `pr/<名字>` | `origin/pr/<名字>`（公开） | 提 PR 的临时分支，PR 结案后删 |
+
+> 留档：中间曾设计过「把 `origin` 让给私有仓库，使 `git push` 不可能误推公开」的双轨方案，
+> 浩瑜权衡后选了更简单的一轨。结论是**简单优先** —— 备份的可靠性来自"一 push 就有"，
+> 不来自分支管理的复杂度。
 
 ## 🔁 两套日常流程
 
