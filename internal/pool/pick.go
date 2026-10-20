@@ -327,6 +327,16 @@ func (p *Pool) pickEarliestExpiryLocked(tried map[string]bool, now time.Time, re
 		if p.floorBlockedForRealmModel(e, model, realm, now) {
 			continue // 积分保底：触底号不接收费模型（兜底路径同判据）
 		}
+		// 保留积分停牌（reserve）：与正常路径 selectable 的第一判据同源。兜底是
+		// **最后一道**选号路径——上面那段注释怎么论证 floor 必须在这里生效，reserve
+		// 就是同一回事：健康候选被 reserve 全拦净后 cands 为空，兜底若不看 reserve，
+		// 就会把刚停牌的号捞回来继续接付费模型，reserve 形同虚设（且 ServableForRealm
+		// 是按 reserve 判「不可服务」的，会出现 healthz 报不可用、真请求却还能选到的
+		// 口径裂缝）。免费档豁免复用 reserveBlocked 的 modelFree 口径（modelFreeOf 查
+		// 上游目录倍率 == 0），保证余额见底的号最后一点额度仍能服务于免费模型。
+		if p.reserveBlocked(e, p.modelFreeOf(e, model)) {
+			continue
+		}
 		if p.inFlightFull(e) {
 			continue
 		}
