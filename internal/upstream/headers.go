@@ -63,22 +63,26 @@ func (c *Client) cliVersion() string {
 	return defaultCliVersion
 }
 
-// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方客户端 buildUserAgent 形态）：
-// `WorkBuddy/<ver> <brand>/<ver> CLI/<cliVer>`（CN）或
-// `workbuddy-ai/<ver> workbuddy-ai/<ver> CLI/<cliVer>`（global）。
+// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方 `buildUserAgent` 形态）：
+// `WorkBuddy/<ver> <brand>/<ver> CLI/<cliVer>`
 //
-// 首段与第二段用**同一个**品牌段（真机两段一致）：CN `WorkBuddy/5.8.3 WorkBuddy/5.8.3`，
-// global `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4`。2026-10-20 双版本真机抓包实测：
+// 首段**恒为驼峰 `WorkBuddy`**，只有第二段随 realm 换品牌：
 //
-//	CN 5.8.3    → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0
-//	global 5.8.4 → workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0
+//	CN 5.8.3     → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0
+//	global 5.8.4 → WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0
 //
-// global 账号送错品牌段可能触发上游 403 code 11140 "request illegal" 风控。
+// 2026-10-21 国际版 5.8.4 GUI 真机抓包（/v2/chat/completions，主对话 + 标题生成
+// 两条）实测即为上式：官方 chat 走 OpenAI SDK（请求带 x-stainless-* 头），SDK 的
+// buildUserAgent 把首段固定成 productName 的驼峰形式 `WorkBuddy/<ver>`，第二段才用
+// 打包期改写后的 slug `workbuddy-ai/<ver>`。
+//
+// 旧实现把首段也写成 realm 品牌（global → `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4`），
+// 与真机不符——那是 /v2/report、/v3/config 这类非 SDK 请求的形态，chat 链路从不用它。
+// global 账号整体送错品牌段可能触发上游 403 code 11140 "request illegal" 风控。
 // 官方无任何 UA 随机化，故默认确定性。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
-	brand := uaBrandFor(a)
 	ver := c.clientVersion(a)
-	return brand + "/" + ver + " " + brand + "/" + ver + " CLI/" + c.cliVersion()
+	return "WorkBuddy/" + ver + " " + uaBrandFor(a) + "/" + ver + " CLI/" + c.cliVersion()
 }
 
 // uaBrandFor 出站 UA 的**第二段**品牌：按 realm 取，两版形态不同（不同分发包）。
