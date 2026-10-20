@@ -42,27 +42,46 @@ import (
 const (
 	desktopReportPath    = "/v2/report"
 	desktopAppearanceSet = "/v2/user-asset/appearance/set"
-	// desktopVersion / desktopCommit / desktopReleaseDate 官方 5.8.4 分发包实测值
+	// desktopVersion / desktopCommit / desktopReleaseDate 官方分发包实测值
 	// （install-manifest.json 的 appVersion + /v2/report body 的 commit/releaseDate）。
 	// 与面板自身 client_version 分开：/v2/report 是「桌面端行为」指纹，应恒为桌面端版本。
-	desktopVersion     = "5.8.4"
-	desktopCommit      = "73952edb48da46bd0b244661efe22f4f247c4977"
-	desktopReleaseDate = int64(1792063084107)
-	// desktopUA 桌面端出站 UA（5.8.4 + 内置 CLI 2.161.0，真机实测形态）。
-	// 品牌段按 realm：国际版 `workbuddy-ai`，国内版 `workbuddy`（同 uaBrandFor）。
-	desktopUA   = "workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"
-	desktopUACN = "workbuddy/5.8.3 workbuddy/5.8.3 CLI/2.161.0"
+	//
+	// **按 realm 分开**（2026-10-20 双版本抓包实测）：两版上报的版本三元组不同，
+	// 且 commit/releaseDate 是打包期常量、无法从版本号推导：
+	//
+	//	CN 5.8.3    ideVersion 5.8.3 commit db0e9b51b7fa… releaseDate 1792029498676
+	//	global 5.8.4 ideVersion 5.8.4 commit 73952edb48da… releaseDate 1792063084107
+	//
+	// 此前不分档、恒用 global 的三元组，等于给每个国内号都盖了国际版的包指纹
+	// （版本号与安装清单自相矛盾），是最容易被设备侧写识破的一处。
+	desktopVersionCN         = "5.8.3"
+	desktopCommitCN          = "db0e9b51b7fa0b383f41f5b0b83dd442c8557918"
+	desktopReleaseDateCN     = int64(1792029498676)
+	desktopVersionGlobal     = "5.8.4"
+	desktopCommitGlobal      = "73952edb48da46bd0b244661efe22f4f247c4977"
+	desktopReleaseDateGlobal = int64(1792063084107)
 )
 
 // desktopBase 桌面端 /v2/report 与 user-asset 走 chatBase（copilot.tencent.com）。
 func (c *Client) desktopBase(a *auth.Auth) string { return c.chatBase(a) }
 
-// desktopUAFor 桌面端 UA：国际版 workbuddy-ai/5.8.4、国内版 workbuddy/5.8.3。
+// desktopUAFor 桌面端 UA：两段品牌一致（与业务链路同源，都是 SDK 的 buildUserAgent）。
+// CN → `WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0`；
+// global → `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`。
 func desktopUAFor(a *auth.Auth) string {
+	ver, _, _ := desktopTriple(a)
+	brand := uaBrandFor(a)
+	cli := defaultCliVersion
+	return brand + "/" + ver + " " + brand + "/" + ver + " CLI/" + cli
+}
+
+// desktopTriple 返回该账号域的桌面端 (ideVersion, commit, releaseDate) 三元组。
+// 两版分发包不同 → 三元组不同；nil（默认 CN 形态）走 CN 值。
+func desktopTriple(a *auth.Auth) (ver, commit string, release int64) {
 	if a != nil && a.IsGlobal() {
-		return desktopUA
+		return desktopVersionGlobal, desktopCommitGlobal, desktopReleaseDateGlobal
 	}
-	return desktopUACN
+	return desktopVersionCN, desktopCommitCN, desktopReleaseDateCN
 }
 
 // desktopHost 返回 X-Domain 用的裸主机名（与真机一致：www.workbuddy.ai /
@@ -87,24 +106,26 @@ func deriveID(a *auth.Auth, salt string) string {
 type DesktopEvent map[string]any
 
 // desktopFingerprint 公共桌面指纹字段（注入每个事件，覆盖同名业务键）。
+// 版本三元组按 realm 取（见 desktopTriple）；qimei36 仅国内版有（见下）。
 func desktopFingerprint(a *auth.Auth) map[string]any {
 	now := time.Now().UnixMilli()
-	return map[string]any{
+	ver, commit, release := desktopTriple(a)
+	fp := map[string]any{
 		"timezone":     "Asia/Shanghai",
 		"reportDelay":  2000,
 		"userId":       a.UID,
 		"username":     a.Nickname,
 		"userNickname": a.Nickname,
 		"product":      "SaaS",
-		"releaseDate":  desktopReleaseDate,
-		"commit":       desktopCommit,
+		"releaseDate":  release,
+		"commit":       commit,
 		"ideName":      "WorkBuddy",
 		"ideType":      "WorkBuddy",
-		"ideVersion":   desktopVersion,
+		"ideVersion":   ver,
 		"machineId":    deriveID(a, "machine"),
 		"sessionId":    deriveID(a, "session"),
 		"extName":      "workbuddy-desktop",
-		"extVersion":   desktopVersion,
+		"extVersion":   ver,
 		"os":           "win32",
 		"arch":         "x64",
 		// osVersion / cpuModel / cpuCores / memorySize 是真机上报名（5.8.4 实测）：
@@ -116,6 +137,14 @@ func desktopFingerprint(a *auth.Auth) map[string]any {
 		"timestamp":  now,
 		"presentAt":  now,
 	}
+	// qimei36：腾讯设备标识（36 位小写十六进制）。2026-10-20 双版本抓包实测——
+	// 国内版每个 report 事件都带，国际版**一条都不带**（CN 28 键 vs GL 27 键，
+	// 差集恰好只有 qimei36）。故按 realm 条件注入：给国际版补这个键反而是伪造。
+	// 取值按 uid 稳定派生（同 deriveID 口径），保证同号跨重启恒同值。
+	if a != nil && !a.IsGlobal() {
+		fp["qimei36"] = deriveID(a, "qimei")
+	}
+	return fp
 }
 
 // ReportDesktopEvent 以桌面客户端指纹向 copilot.tencent.com/v2/report 批量上报事件。

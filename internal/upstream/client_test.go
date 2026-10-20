@@ -651,8 +651,8 @@ func TestFetchModelsOverlaysV3ConfigCapabilities(t *testing.T) {
 			],"agents":[{"name":"cli","models":["deepseek-v4.1-flash"]}]}}`), nil
 		case strings.HasSuffix(r.URL.Path, "/v3/config"):
 			sawIDE = true
-			if r.Header.Get("User-Agent") != codeBuddyIDEUA {
-				t.Errorf("v3/config UA=%q want %s", r.Header.Get("User-Agent"), codeBuddyIDEUA)
+			if r.Header.Get("User-Agent") != v3ProbeUACNForTest {
+				t.Errorf("v3/config UA=%q want %s", r.Header.Get("User-Agent"), v3ProbeUACNForTest)
 			}
 			if r.Header.Get("X-Product") != "SaaS" {
 				t.Errorf("X-Product=%q want SaaS", r.Header.Get("X-Product"))

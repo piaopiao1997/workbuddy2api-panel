@@ -258,8 +258,8 @@ func (c *Client) probeGlobalModels(a *auth.Auth) (names []string, infos []ModelI
 		}()
 		return ch
 	}
-	v3IDECh := probeV3(codeBuddyIDEUA)
-	v3CLICh := probeV3(codeBuddyCLIUA)
+	v3IDECh := probeV3(c.v3ProbeUA(a))
+	v3CLICh := probeV3(c.v3ProbeUALite(a))
 	// 第三路：桌面端形态。缺它就会漏掉仅桌面端下发的模型——global 侧 gpt-6-luna
 	// 即此例（目录里没有、实际可调用），用户侧表现为「模型列表不全」。
 	v3DesktopCh := probeV3(c.desktopProbeUA())

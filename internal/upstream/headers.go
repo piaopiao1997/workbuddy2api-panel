@@ -63,37 +63,80 @@ func (c *Client) cliVersion() string {
 	return defaultCliVersion
 }
 
-// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方桌面端 RestOperations 层形状）：
-// `WorkBuddy/<clientVersion> <platform>/<clientVersion> CLI/<cliVersion>`。
-// 平台段（第二段）品牌按 realm 切换——CN 用 applicationName 同值 `WorkBuddy`，
-// global 用官方国际版 productName `WorkBuddy AI`（intl 项目逆向证据：
-// `WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2`）。
-// global 账号送错平台段（`WorkBuddy` 非 `WorkBuddy AI`）可能触发上游 403 code 11140
-// "request illegal" 风控。官方无任何 UA 随机化，故默认确定性。
+// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方客户端 buildUserAgent 形态）：
+// `WorkBuddy/<ver> <brand>/<ver> CLI/<cliVer>`（CN）或
+// `workbuddy-ai/<ver> workbuddy-ai/<ver> CLI/<cliVer>`（global）。
+//
+// 首段与第二段用**同一个**品牌段（真机两段一致）：CN `WorkBuddy/5.8.3 WorkBuddy/5.8.3`，
+// global `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4`。2026-10-20 双版本真机抓包实测：
+//
+//	CN 5.8.3    → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0
+//	global 5.8.4 → workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0
+//
+// global 账号送错品牌段可能触发上游 403 code 11140 "request illegal" 风控。
+// 官方无任何 UA 随机化，故默认确定性。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
 	brand := uaBrandFor(a)
 	ver := c.clientVersion(a)
 	return brand + "/" + ver + " " + brand + "/" + ver + " CLI/" + c.cliVersion()
 }
 
-// uaBrandFor 出站 UA 的品牌段：**全小写连字符**，按 realm 取。
+// uaBrandFor 出站 UA 的**第二段**品牌：按 realm 取，两版形态不同（不同分发包）。
 //
-// 为什么不是 "WorkBuddy" / "WorkBuddy AI"：真机抓包（国际版 5.8.4）实测出站 UA 是
-// `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0` —— 品牌段来自客户端
-// buildUserAgent()（platform/applicationName 环境变量），取自 product.json 的
-// productName 但**转成小写连字符 slug**（"WorkBuddy AI" → `workbuddy-ai`，
-// "WorkBuddy" → `workbuddy`），不是展示名本体的驼峰形态。
-// 大驼峰形态与真实分发包对不上，是「被判定非官方客户端」的候选指纹之一。
+// 2026-10-20 真机双版本抓包实测（同一台机器、同一套代理）：
+//   - 国内版 5.8.3（productName `WorkBuddy`）→ `WorkBuddy/5.8.3`，**驼峰原样**，
+//     业务链路 28 个路径全部如此；
+//   - 国际版 5.8.4（productName `WorkBuddy AI`）→ `workbuddy-ai/5.8.4`，**小写连字符
+//     slug**，业务链路 22 个路径全部如此。
+//
+// 为什么两版规则不同：brand 段来自 buildUserAgent() 的 applicationName/productName，
+// 而 applicationName 在打包期被改写。CN 包直接沿用驼峰 productName；GL 包走了
+// Electron 的 userAgentFallback 替换路径（asciiSlug：非字母数字换成 `-` 并转小写），
+// 于是 `WorkBuddy AI` → `workbuddy-ai`。
+//
+// 反例警示：曾把 CN 也写成小写 `workbuddy`（按 GL 规则统一），与实测不符——CN 的
+// 每个业务请求都是驼峰，写成 slug 反而成了最明显的非官方指纹。
 func uaBrandFor(a *auth.Auth) string {
 	if a != nil && a.IsGlobal() {
 		return "workbuddy-ai"
 	}
-	return "workbuddy"
+	return "WorkBuddy"
 }
 
 // defaultWorkBuddyUA 返回 CN 形态的默认 UA（默认账号形态即 CN，零回归兼容既有调用/测试）。
 func (c *Client) defaultWorkBuddyUA() string {
 	return c.defaultWorkBuddyUAFor(nil)
+}
+
+// v3ProbeUA /v3/config 目录探测的官方 UA（真机实测形态）。
+//
+// 2026-10-20 双版本抓包实测，两版对同一个 /v3/config 端点发的 UA 并不同：
+//
+//	CN 5.8.3    → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0   （三段，重复品牌）
+//	global 5.8.4 → WorkBuddy/5.8.4 CLI/2.161.0                    （两段，单品牌）
+//
+// 旧实现在这里发 `CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0` 与
+// `CLI/2.63.2 CodeBuddy/2.63.2` 两套 CodeBuddy 家族 UA —— 那是从旧版 IDE
+// 客户端抄来的，WorkBuddy 分发包里根本不存在这两个串，属于最显眼的非官方指纹。
+func (c *Client) v3ProbeUA(a *auth.Auth) string {
+	ver := c.clientVersion(a)
+	if a != nil && a.IsGlobal() {
+		return "WorkBuddy/" + ver + " CLI/" + c.cliVersion()
+	}
+	return "WorkBuddy/" + ver + " " + uaBrandFor(a) + "/" + ver + " CLI/" + c.cliVersion()
+}
+
+// v3ProbeUALite /v3/config 第二路探测 UA：单品牌两段式。
+//
+// 保留双路探测是因为该端点按 UA 家族下发**不同模型集合**（实测 CN 19 / 32 / 54 条，
+// global 13 / 22 / 29 条，三族各有独有模型），只探一族会让 /v1/models 少模型。
+// 但两路都必须是官方真实出现过的形态——这里取 global 的 config UA 形态
+// （`WorkBuddy/<ver> CLI/<cli>`，与 v3ProbeUA 在 CN 下的三段式互补）。
+//
+// 注意：global 账号下本函数与 v3ProbeUA 返回同一串（真机 global 只发这一种形态），
+// 于是两路探测退化为重复请求——无害（并集去重），但不要据此认为 global 有第三族。
+func (c *Client) v3ProbeUALite(a *auth.Auth) string {
+	return "WorkBuddy/" + c.clientVersion(a) + " CLI/" + c.cliVersion()
 }
 
 // userAgent 返回当前出站 UA（客户端出站路径：chat/refresh/FetchModels）。
@@ -107,21 +150,20 @@ func (c *Client) userAgent(a *auth.Auth) string {
 	return c.defaultWorkBuddyUAFor(a)
 }
 
-// billingUA 白名单类（billing/checkin/banner）出站 UA：单段 `WorkBuddy/<clientVersion>`
-// （官方 banner 显式覆写形态，不带 CLI 段）。默认生效（伪造官方桌面端指纹）；
-// 显式 client_name="SaaS" 才不设 UA（还原旧行为，Go 默认 UA）。
+// billingUA 白名单类（billing/checkin/banner）出站 UA：**恒为 axios 默认串**。
+//
+// 2026-10-20 双版本真机抓包实测：两版 billing 层（summary / paid-packages /
+// free-packages / checkin-activity-status / ambassador status）发的都是
+// `axios/1.16.1`，与客户端自身 UA 完全不同——billing 域的 RestOperations 走
+// axios 实例而非 SDK 客户端，所以不带任何品牌段。
+//
+// 此前 CN 侧发 `WorkBuddy/<ver>`：那是「按客户端 UA 推理」的产物，实测不符。
+// 显式 client_name="SaaS" 时仍不设 UA（保留既有逃生开关，还原 Go 默认 UA）。
 func (c *Client) billingUA(a *auth.Auth) string {
 	if c == nil || c.attributionClientName() == "SaaS" {
 		return ""
 	}
-	// global 域的真机计费请求 UA 是 axios 默认串（实测 5.8.4 国际版：
-	// `/billing/meter/get-user-resource-*` 与 `-summary` 全部 `axios/1.16.1`），
-	// 与客户端自身 UA 不同——billing 层的 RestOperations 用的是 axios。
-	// CN 保持既有 `WorkBuddy/<ver>`（线上可用，不动）。
-	if a != nil && a.IsGlobal() {
-		return "axios/1.16.1"
-	}
-	return "WorkBuddy/" + c.clientVersion(a)
+	return "axios/1.16.1"
 }
 
 // resolveDeviceToken 解析本次请求的 X-Device-Token 取值。
@@ -200,12 +242,18 @@ func (c *Client) CommonHeaders(req *http.Request, a *auth.Auth) {
 	c.injectAccountStableHeaders(req, a)
 }
 
-// acceptLanguageFor 按账号 realm 返回 Accept-Language：global → en-US，cn → zh-CN。
+// acceptLanguageFor 返回 Accept-Language。
+//
+// 2026-10-20 双版本真机抓包实测：这个头**不按账号域切**，而是跟随操作系统区域。
+// 同一台中文系统机器上，CN 与 GL 的表现一致：多数请求根本不带该头（CN 128 条里
+// 71 条无、GL 218 条里 80 条无），显式带上时以 `zh`（billing 层固定）与
+// `zh-CN`（Chromium 渲染层）为主，`en-US` 只在 GL 出现 1 次。
+//
+// 旧实现「global → en-US」是按账号域臆测的，实测不成立（曾据此把国际版所有请求
+// 都打成 en-US，反而成了与真机不符的指纹）。网关没有操作系统区域可言，统一取
+// billing 层实测的 `zh`，两端同值。
 func acceptLanguageFor(a *auth.Auth) string {
-	if a != nil && a.IsGlobal() {
-		return "en-US"
-	}
-	return "zh-CN"
+	return "zh"
 }
 
 // injectIdentityHeaders 注入官方客户端的身份头族（X-Auth-Method / X-Id-Source /

@@ -22,17 +22,25 @@ func globalAuth() *auth.Auth {
 	return &auth.Auth{UID: "u-g", AccessToken: "at", Domain: "www.workbuddy.ai", Nickname: "g"}
 }
 
-// TestUARealmBrand 品牌段必须是小写连字符 slug，且版本按 realm 分开。
+// v3ProbeUACNForTest 国内版 /v3/config 实测 UA（默认 Client、CN 账号）。
+// 2026-10-20 抓包：`WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0`。
+const v3ProbeUACNForTest = "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"
+
+// TestUARealmBrand 两版品牌段形态**不同**，版本按 realm 分开。
 //
-// 真机国际版 UA：`workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`
-// （分发包 productName "WorkBuddy AI" 转 slug；国内版 "WorkBuddy" → `workbuddy`）。
-// 原先写的是大驼峰 `WorkBuddy/5.5.4 WorkBuddy AI/5.5.4 CLI/2.137.1`：品牌段形态
-// 与版本号都对不上真实分发包。
+// 2026-10-20 双版本真机抓包（同一台机器、同一套代理）：
+//
+//	CN 5.8.3    → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0     （驼峰原样，28 路径）
+//	global 5.8.4 → workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0 （小写连字符，22 路径）
+//
+// 关键：CN 的 brand 段是**驼峰**，不是 slug。曾把 CN 也写成 `workbuddy`（把 GL 的
+// 规则统一套过去），那是错的——CN 每个业务请求都是驼峰，写成 slug 反而成了最明显
+// 的非官方指纹。两版规则不同是因为 applicationName 在打包期被改写方式不同。
 func TestUARealmBrand(t *testing.T) {
 	c := New()
 
 	cn := &auth.Auth{UID: "u-c", AccessToken: "at"}
-	if got, want := c.userAgent(cn), "workbuddy/5.8.3 workbuddy/5.8.3 CLI/2.161.0"; got != want {
+	if got, want := c.userAgent(cn), "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"; got != want {
 		t.Errorf("CN UA=%q want %q", got, want)
 	}
 	if got, want := c.userAgent(globalAuth()), "workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"; got != want {
@@ -46,18 +54,49 @@ func TestUARealmBrand(t *testing.T) {
 	}
 }
 
-// TestBillingUAAxiosForGlobal 国际版计费请求的 UA 是 axios 默认串。
+// TestV3ProbeUAOfficial 目录探测 UA 必须两版各一处官方形态，不能是 CodeBuddy 家族。
 //
-// 真机实测：`/billing/meter/get-user-resource-*` 与 `-summary` 三件套的 UA 都是
-// `axios/1.16.1`（billing 层的 RestOperations 走 axios），与客户端自身 UA 不同。
-// CN 保持 `WorkBuddy/<ver>` 不动——线上可用，没有证据说要改。
-func TestBillingUAAxiosForGlobal(t *testing.T) {
+// 真机实测两版对同一 /v3/config 端点发的 UA 不同：
+//
+//	CN     → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0  （三段，重复品牌）
+//	global → WorkBuddy/5.8.4 CLI/2.161.0                  （两段，单品牌）
+//
+// 旧实现发 `CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0` / `CLI/2.63.2 CodeBuddy/2.63.2`：
+// 这两个串在 WorkBuddy 分发包里根本不存在（只有 WorkBuddy 形态），属最显眼的指纹。
+func TestV3ProbeUAOfficial(t *testing.T) {
+	c := New()
+	cn := &auth.Auth{UID: "u-c", AccessToken: "at"}
+
+	if got, want := c.v3ProbeUA(cn), "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"; got != want {
+		t.Errorf("CN v3ProbeUA=%q want %q", got, want)
+	}
+	if got, want := c.v3ProbeUA(globalAuth()), "WorkBuddy/5.8.4 CLI/2.161.0"; got != want {
+		t.Errorf("global v3ProbeUA=%q want %q", got, want)
+	}
+	// 第二路（单品牌两段式）在 CN 下与主路不同，才有多目录覆盖的意义。
+	if got, want := c.v3ProbeUALite(cn), "WorkBuddy/5.8.3 CLI/2.161.0"; got != want {
+		t.Errorf("CN v3ProbeUALite=%q want %q", got, want)
+	}
+	// 任何一路都不许再出现 CodeBuddy 字面量。
+	for _, ua := range []string{c.v3ProbeUA(cn), c.v3ProbeUA(globalAuth()), c.v3ProbeUALite(cn), c.desktopProbeUA()} {
+		if strings.Contains(ua, "CodeBuddy") {
+			t.Errorf("探测 UA 仍含 CodeBuddy 家族字面量: %q", ua)
+		}
+	}
+}
+
+// TestBillingUAAxiosBothRealms 两版计费请求的 UA 都是 axios 默认串。
+//
+// 真机实测：CN 与 GL 的 `/billing/meter/get-user-resource-*`、`-summary`、
+// `checkin-activity-status` 的 UA 全是 `axios/1.16.1` —— billing 层走 axios 实例，
+// 不带任何品牌段。旧实现 CN 侧发 `WorkBuddy/<ver>` 是按客户端 UA 推理的产物。
+func TestBillingUAAxiosBothRealms(t *testing.T) {
 	c := New()
 	if got := c.billingUA(globalAuth()); got != "axios/1.16.1" {
 		t.Errorf("global billing UA=%q want axios/1.16.1", got)
 	}
-	if got := c.billingUA(&auth.Auth{UID: "u-c", AccessToken: "at"}); !strings.HasPrefix(got, "WorkBuddy/") {
-		t.Errorf("CN billing UA=%q want WorkBuddy/<ver>", got)
+	if got := c.billingUA(&auth.Auth{UID: "u-c", AccessToken: "at"}); got != "axios/1.16.1" {
+		t.Errorf("CN billing UA=%q want axios/1.16.1", got)
 	}
 }
 
@@ -160,6 +199,139 @@ func TestDesktopReportDomainIsHost(t *testing.T) {
 	want := u.Hostname()
 	if gotDomain != want {
 		t.Fatalf("X-Domain=%q want %q（裸 host，不带 scheme）", gotDomain, want)
+	}
+}
+
+// TestDesktopReportFingerprintPerRealm /v2/report 的版本三元组按 realm 分档，
+// 且 qimei36 只在国内版出现。
+//
+// 2026-10-20 双版本真机抓包（同一台机器）：
+//
+//	CN     ideVersion 5.8.3 commit db0e9b51b7fa… releaseDate 1792029498676，**带** qimei36
+//	global ideVersion 5.8.4 commit 73952edb48da… releaseDate 1792063084107，**无** qimei36
+//
+// 键数差集恰好只有 qimei36（CN 28 键 / GL 27 键）。此前不分档、恒用 GL 的三元组，
+// 等于给每个国内号都盖了国际版的包指纹；给 GL 补 qimei36 则是无中生有。
+func TestDesktopReportFingerprintPerRealm(t *testing.T) {
+	cases := []struct {
+		name    string
+		auth    *auth.Auth
+		ver     string
+		commit  string
+		release int64
+		qimei   bool
+	}{
+		{"CN", &auth.Auth{UID: "u-c", AccessToken: "at", Nickname: "cn"},
+			"5.8.3", "db0e9b51b7fa0b383f41f5b0b83dd442c8557918", 1792029498676, true},
+		{"global", globalAuth(),
+			"5.8.4", "73952edb48da46bd0b244661efe22f4f247c4977", 1792063084107, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fp := desktopFingerprint(tc.auth)
+			if fp["ideVersion"] != tc.ver || fp["extVersion"] != tc.ver {
+				t.Errorf("ideVersion/extVersion=%v/%v want %s", fp["ideVersion"], fp["extVersion"], tc.ver)
+			}
+			if fp["commit"] != tc.commit {
+				t.Errorf("commit=%v want %s", fp["commit"], tc.commit)
+			}
+			if fp["releaseDate"] != tc.release {
+				t.Errorf("releaseDate=%v want %d", fp["releaseDate"], tc.release)
+			}
+			got, has := fp["qimei36"]
+			if has != tc.qimei {
+				t.Fatalf("qimei36 存在性=%v want %v（CN 有 / global 无）", has, tc.qimei)
+			}
+			if tc.qimei {
+				s, _ := got.(string)
+				if len(s) != 36 {
+					t.Errorf("qimei36=%q 长度=%d want 36 hex", s, len(s))
+				}
+				// 同号幂等：设备标识跨调用必须恒同值。
+				if again := desktopFingerprint(tc.auth)["qimei36"]; again != got {
+					t.Errorf("qimei36 非幂等: %v vs %v", got, again)
+				}
+			}
+		})
+	}
+}
+
+// TestDesktopUAPerRealm 桌面端 UA 的品牌段与客户端版本都跟着 realm 走。
+func TestDesktopUAPerRealm(t *testing.T) {
+	cn := &auth.Auth{UID: "u-c", AccessToken: "at"}
+	if got, want := desktopUAFor(cn), "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"; got != want {
+		t.Errorf("CN desktop UA=%q want %q", got, want)
+	}
+	if got, want := desktopUAFor(globalAuth()), "workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"; got != want {
+		t.Errorf("global desktop UA=%q want %q", got, want)
+	}
+}
+
+// TestAcceptLanguageSameBothRealms Accept-Language 不按账号域切。
+//
+// 真机实测：跟随操作系统区域，同一台中文机器上 CN/GL 都是 `zh`（billing 层固定）
+// 或 `zh-CN`（渲染层），多数请求干脆不带。旧实现「global → en-US」是臆测。
+func TestAcceptLanguageSameBothRealms(t *testing.T) {
+	cn, gl := acceptLanguageFor(&auth.Auth{UID: "u-c"}), acceptLanguageFor(globalAuth())
+	if cn != gl {
+		t.Errorf("两域取值不一致: CN=%q GL=%q（真机同机同值）", cn, gl)
+	}
+	if cn == "en-US" {
+		t.Errorf("不应按域硬编码 en-US（实测仅出现 1 次，非常态）")
+	}
+}
+
+// TestGlobalPackageDetailsBodyShapes paid / free 两份明细的请求体**不同形**。
+//
+// 2026-10-20 双版本真机抓包（CN/GL 一致）：
+//
+//	paid-packages: {PageNumber, PageSize, PackageCodes, Status:[0,3], NeedRenewInfo:true}
+//	               —— 无 SlicePeriod 时间切片
+//	free-packages: … + SlicePeriodStartTime / SlicePeriodEndTime
+//	               —— 无 NeedRenewInfo
+//
+// 此前两条共用同一 body（都带切片、都无 NeedRenewInfo），paid 包因此拿不到续订窗口。
+func TestGlobalPackageDetailsBodyShapes(t *testing.T) {
+	bodies := map[string]map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		name := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		bodies[name] = m
+		w.Write([]byte(`{"code":0,"msg":"OK","data":{"Accounts":[]}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), BillingBaseGlobal: srv.URL, GlobalEnabled: true}
+	c.globalPackageDetails(globalAuth(), []string{"PKG-A"})
+
+	paid, ok := bodies["get-user-resource-paid-packages"]
+	if !ok {
+		t.Fatalf("未请求 paid-packages，实际=%v", bodies)
+	}
+	if _, has := paid["SlicePeriodStartTime"]; has {
+		t.Errorf("paid-packages 不该带时间切片: %v", paid)
+	}
+	if paid["NeedRenewInfo"] != true {
+		t.Errorf("paid-packages 必须带 NeedRenewInfo:true，实际=%v", paid["NeedRenewInfo"])
+	}
+
+	free, ok := bodies["get-user-resource-free-packages"]
+	if !ok {
+		t.Fatalf("未请求 free-packages，实际=%v", bodies)
+	}
+	if _, has := free["NeedRenewInfo"]; has {
+		t.Errorf("free-packages 不该带 NeedRenewInfo: %v", free)
+	}
+	if free["SlicePeriodStartTime"] == nil || free["SlicePeriodEndTime"] == nil {
+		t.Errorf("free-packages 必须带时间切片: %v", free)
+	}
+
+	// 两条共有字段必须一致（差集只允许上面那两处）。
+	for _, k := range []string{"PageNumber", "PageSize", "PackageCodes", "Status"} {
+		if paid[k] == nil || free[k] == nil {
+			t.Errorf("共有字段 %s 缺失: paid=%v free=%v", k, paid[k], free[k])
+		}
 	}
 }
 

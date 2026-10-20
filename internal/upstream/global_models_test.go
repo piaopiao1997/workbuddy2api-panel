@@ -40,13 +40,13 @@ func TestGlobalCatalogProbesDesktopUA(t *testing.T) {
 		seenUA[ua] = true
 		seenMu.Unlock()
 		ids := []string{"shared-model"}
+		// 官方 UA 只有两种形态（2026-10-20 真机抓包）：三段重复品牌（桌面族）与
+		// 两段单品牌（CLI 族）。旧的 CodeBuddyIDE/CLI 家族字面量在分发包里不存在。
 		switch {
-		case strings.HasPrefix(ua, "CodeBuddyIDE/"):
-			ids = append(ids, "ide-only")
-		case strings.HasPrefix(ua, "CLI/"):
-			ids = append(ids, "cli-only")
-		case strings.HasPrefix(ua, "workbuddy-ai/"), strings.HasPrefix(ua, "workbuddy/"):
+		case repeatedBrand(ua):
 			ids = append(ids, desktopOnly)
+		case strings.HasPrefix(ua, "WorkBuddy/"), strings.HasPrefix(ua, "workbuddy-ai/"):
+			ids = append(ids, "cli-only")
 		default:
 			t.Errorf("v3/config 探测带了非预期 UA: %q", ua)
 		}
@@ -96,8 +96,8 @@ func TestGlobalCatalogProbesDesktopUA(t *testing.T) {
 		seen = append(seen, ua)
 	}
 	seenMu.Unlock()
-	if len(seen) != 3 {
-		t.Errorf("v3/config 应探 3 种 UA 家族，实际 %d 种: %v", len(seen), seen)
+	if len(seen) != 2 {
+		t.Errorf("v3/config 应探 2 种官方 UA 形态，实际 %d 种: %v", len(seen), seen)
 	}
 }
 
@@ -116,14 +116,14 @@ func TestGlobalCatalogDesktopProbeFailureFallsBackToUnion(t *testing.T) {
 		ua := r.Header.Get("User-Agent")
 		var ids []string
 		switch {
-		case strings.HasPrefix(ua, "workbuddy-ai/"), strings.HasPrefix(ua, "workbuddy/"):
+		case repeatedBrand(ua):
 			// 桌面族失败（模拟上游对该族 500）。
 			w.WriteHeader(http.StatusInternalServerError)
 			return
-		case strings.HasPrefix(ua, "CodeBuddyIDE/"):
-			ids = []string{"ide-model"}
-		default:
+		case strings.HasPrefix(ua, "WorkBuddy/"):
 			ids = []string{"cli-model"}
+		default:
+			ids = []string{"other-model"}
 		}
 		models := make([]map[string]any, 0, len(ids))
 		for _, id := range ids {
@@ -142,8 +142,8 @@ func TestGlobalCatalogDesktopProbeFailureFallsBackToUnion(t *testing.T) {
 	for _, n := range names {
 		got[n] = true
 	}
-	if !got["ide-model"] || !got["cli-model"] {
-		t.Fatalf("桌面族失败时应回落 IDE+CLI 并集，实际=%v", names)
+	if !got["cli-model"] {
+		t.Fatalf("桌面族失败时应回落 CLI 族结果，实际=%v", names)
 	}
 	if src := c.GlobalCatalogSource(); src != globalCatalogSourceUnion {
 		t.Errorf("目录来源=%q want %q", src, globalCatalogSourceUnion)
@@ -248,4 +248,16 @@ func TestInvalidateGlobalModelsCacheReprobes(t *testing.T) {
 	if got := atomic.LoadInt32(&v3Hits); got <= first {
 		t.Fatalf("清缓存后应重新探测：before=%d after=%d", first, got)
 	}
+}
+
+// repeatedBrand 报告 UA 是否形态为「品牌段重复两次」（官方桌面族三段式特征）：
+// `WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0` /
+// `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`。
+func repeatedBrand(ua string) bool {
+	for _, b := range []string{"WorkBuddy/", "workbuddy-ai/"} {
+		if strings.Count(ua, b) >= 2 {
+			return true
+		}
+	}
+	return false
 }

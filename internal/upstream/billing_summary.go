@@ -209,13 +209,28 @@ func (c *Client) globalUserResource(a *auth.Auth, soon time.Duration) (remain, t
 // globalPackageDetails 拉 paid + free 两份明细并合并。
 // 两条都失败 → nil（调用方降级为「无到期批次」）；一条失败只损失那一类的到期信息。
 //
-// body 必须与官方客户端同形（真机抓包）：空 `{}` 会被上游直接 400 Bad Request。
-// 四个字段各有用途——PackageCodes 缩小扫描范围（用 summary 已给的码，避免按时间
-// 盲扫漏包）；Status [0,3] = 有效/已过期都要（过期包带权威 DeductionEndTime）；
-// SlicePeriod 是「统计切片」，取当日 00:00:00–23:59:59（上游按 UTC+8 解释）。
+// **两条端点的请求体不同形**（2026-10-20 双版本真机抓包实测，CN/GL 完全一致）：
+//
+//	paid-packages: {PageNumber, PageSize, PackageCodes, Status:[0,3], NeedRenewInfo:true}
+//	               —— **没有** SlicePeriod 时间切片
+//	free-packages: {PageNumber, PageSize, PackageCodes, Status:[0,3],
+//	               SlicePeriodStartTime:<当日> 00:00:00, SlicePeriodEndTime:<当日> 23:59:59}
+//	               —— 带时间切片，**没有** NeedRenewInfo
+//
+// 此前两条共用同一个 body（都带时间切片、都不带 NeedRenewInfo），与官方客户端不符：
+// `NeedRenewInfo` 是「是否要返回续订信息」的开关，paid 包靠它拿续订窗口。
+// PackageCodes 用 summary 已给的码缩小扫描范围（不按时间盲扫，避免漏包）；
+// Status [0,3] = 有效/已过期都要（过期包带权威 DeductionEndTime）。
 func (c *Client) globalPackageDetails(a *auth.Auth, codes []string) []packageDetail {
 	now := time.Now().In(softRateResetLoc)
-	body := map[string]any{
+	paidBody := map[string]any{
+		"PageNumber":    1,
+		"PageSize":      200,
+		"PackageCodes":  codes,
+		"Status":        []int{0, 3},
+		"NeedRenewInfo": true,
+	}
+	freeBody := map[string]any{
 		"PageNumber":           1,
 		"PageSize":             200,
 		"PackageCodes":         codes,
@@ -224,8 +239,14 @@ func (c *Client) globalPackageDetails(a *auth.Auth, codes []string) []packageDet
 		"SlicePeriodEndTime":   now.Format("2006-01-02") + " 23:59:59",
 	}
 	var out []packageDetail
-	for _, path := range []string{billingPaidPath, billingFreePath} {
-		raw, err := c.billingJSON(a, "POST", path, body)
+	for _, req := range []struct {
+		path string
+		body map[string]any
+	}{
+		{billingPaidPath, paidBody},
+		{billingFreePath, freeBody},
+	} {
+		raw, err := c.billingJSON(a, "POST", req.path, req.body)
 		if err != nil {
 			continue
 		}

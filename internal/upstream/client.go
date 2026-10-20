@@ -1559,24 +1559,14 @@ func generationKind(tags []string) string {
 	return ""
 }
 
-// codeBuddyIDEUA /v3/config 要求能解析出 CodeBuddy 版本号的 UA。
-// CLI 三段式 WorkBuddy UA 会拿到精简目录（flash 输出 128K、无 supportedEfforts）；
-// 官方 IDE 头 `CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0` 才返回完整能力
-// （flash：393216 + low/high/max）。
-// 版本号需随上游 IDE 发版跟进：UAn 版本过旧时该端点可能同样返回精简目录。
-const codeBuddyIDEUA = "CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0"
-
-// codeBuddyCLIUA CLI 三段式 UA。**实测（2026-09-22）该端点对不同 UA 下发的模型集合不同**：
-//   - IDE UA  → 14 条（10 个 chat：含 o4-mini / enhance-1.0 / auto-chat，**无 deepseek 系列**）
-//   - CLI UA  → 22 条（22 个 chat：**含 deepseek-v4.1-flash / deepseek-v4.1-flash-sg /
-//     gpt-6-astra / kimi-k2.8-preview**，但无 o4-mini / enhance-1.0 / auto-chat）
+// v3/config 官方客户端 UA 见 headers.go 的 v3ProbeUA / v3ProbeUALite。
 //
-// 注意两点，都与旧注释相反，勿再按旧注释推断：
-//  1. 旧注释称「CLI UA 拿到精简目录、IDE UA 才返回完整能力」——实测模型数量恰好相反，
-//     但 **IDE 响应体积更大**（26003B vs 21111B），故「完整能力」应理解为**单条字段更全**，
-//     而非模型更多。两路各有独有模型，缺一不可。
-//  2. 该常量仅用于 global 侧第二路探测；CN 侧仍走 codeBuddyIDEUA 单路。
-const codeBuddyCLIUA = "CLI/2.63.2 CodeBuddy/2.63.2"
+// 历史注记：本文件曾用 `CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0` 与
+// `CLI/2.63.2 CodeBuddy/2.63.2` 两套 CodeBuddy 家族常量探测该端点，理由是
+// 「该端点对不同 UA 下发不同模型集合」。结论（按 UA 家族分发不同目录）仍然成立，
+// 但 **UA 取值本身是错的**：2026-10-20 双版本 WorkBuddy 真机抓包显示，该端点收到
+// 的 UA 只有 `WorkBuddy/<ver> [<brand>/<ver>] CLI/2.161.0` 这两种形态，分发包里
+// 不存在 CodeBuddy 字面量。保留双路探测以维持目录覆盖，但两条都用官方形态。
 
 // FetchModels 调上游动态模型接口（CN 侧；global 账号见 global_models.go 家族）。
 //
@@ -1743,7 +1733,7 @@ func (c *Client) fetchEnterpriseModels(a *auth.Auth) ([]ModelInfo, error) {
 // nonChatModel 规则剔除非对话条目（selected 会选模型报 code=11102）。
 // 失败返回错误（调用方降级为仅企业端点）。
 func (c *Client) fetchV3Models(a *auth.Auth) ([]ModelInfo, error) {
-	byID, err := c.fetchV3ConfigModelMap(a, codeBuddyIDEUA)
+	byID, err := c.fetchV3ConfigModelMap(a, c.v3ProbeUA(a))
 	if err != nil {
 		return nil, err
 	}
@@ -2063,7 +2053,7 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 	req.Header.Set("X-Domain", v3ConfigDomain(a, c.chatBase(a)))
 	req.Header.Set("X-Product", "SaaS")
 	if ua == "" {
-		ua = codeBuddyIDEUA
+		ua = c.v3ProbeUA(a)
 	}
 	req.Header.Set("User-Agent", ua)
 	c.injectCodeBuddyRequest(req)
