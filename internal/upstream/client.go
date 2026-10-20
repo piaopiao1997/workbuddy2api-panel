@@ -232,8 +232,13 @@ func SoftRateResetLoc() *time.Location { return softRateResetLoc }
 //     与额度耗尽（14001/14002/14012/…）明确分开——它不是账号问题（xiaofan6ya 线上
 //     事故：按账号级处理时 6 个并发请求 76 秒冷掉整池 → 全站 503 十分钟）。
 //
-// ponytail: 两者共用一套模型级判定与 TTL；实测发现同一 (号,模型) 被反复停车再给 14003 独立短档。
+// ponytail: 两者共用一套模型级判定；TTL 不共用——6004 带额度窗口（有墙钟时对齐，
+// 没有时退避），14003 是瞬时繁忙，由 CooldownModelBusy 给独立短档（60s 起、封顶 3m），
+// 不套 soft_rate 的 600s→2h 阶梯。
 const modelRateLimitCodes = "6004|14003"
+
+// modelBusyCode 「当前模型请求繁忙」的业务 code（modelRateLimitCodes 的子集）。
+const modelBusyCode = "14003"
 
 // softRateResetPatternCN/EN 匹配重置文案（CN「将在 … 重置」/ global 域英文
 // "reset at <固定格式时间>"），捕获中间的时间串。
@@ -245,6 +250,7 @@ const softRateResetPatternEN = `(?i)reset at (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2
 // 轰炸）时尤甚。模式串均为纯常量。regexp 并发安全（匹配只读），无需额外锁。
 var (
 	reModelRateLimit  = regexp.MustCompile(`"code"\s*:\s*"?(` + modelRateLimitCodes + `)"?`)
+	reModelBusy       = regexp.MustCompile(`"code"\s*:\s*"?` + modelBusyCode + `"?`)
 	reSoftRateResetCN = regexp.MustCompile(softRateResetPatternCN)
 	reSoftRateResetEN = regexp.MustCompile(softRateResetPatternEN)
 )
@@ -255,8 +261,19 @@ const softRateTimeLayout = "2006-01-02 15:04:05"
 // IsModelRateLimit 报告 body 是否明确指向模型级限流（业务 code 6004 / 14003）。
 // 用于区分"账号级软限流"（按账号冷却）与"模型级限流"（切模型即可用）。
 func IsModelRateLimit(body string) bool {
-	// `"code":6004` / `"code": 6004` / `"code":"6004"` 均可命中（JSON 空格容差）。
+	// `"code":6004` / `"code": 6004` / `"code":"6004"` 均可命中（JSON 空格容差），
+	// 14003 同理。
 	return reModelRateLimit.MatchString(body)
+}
+
+// IsModelBusy 报告 body 是否是「模型繁忙」(code 14003)。
+//
+// 与 6004 的区别：6004 是额度窗口用满，带「将在 … 重置」的权威恢复时刻；
+// 14003 只是瞬时繁忙，body 里没有任何时间。前者该按上游墙钟停车，后者只能
+// 短窗口退避——套用 soft_rate（600s 起、翻倍到 2h）会把一次抖动变成十分钟
+// 不可用：一个请求轮转几个号，每个号都中 14003，几十秒内整池冷却 10 分钟。
+func IsModelBusy(body string) bool {
+	return reModelBusy.MatchString(body)
 }
 
 // modelBlockCode 明确指向「该后端无此模型」的业务 code。

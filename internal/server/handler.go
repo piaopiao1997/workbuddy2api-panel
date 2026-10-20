@@ -1562,6 +1562,13 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 			retryAfter = time.Now().Add(uerr.RetryAfter)
 		}
 		if modelRateLimited {
+			// 14003 是「模型繁忙」：没有恢复时刻，上游文案就是让客户端换模型/稍后
+			// 重试，不是这个号被限流。给独立短窗口（60s 起、封顶 3m），不套 soft_rate
+			// 的 600s→2h 阶梯，否则一次抖动就是十分钟不可用。
+			if retryAfter.IsZero() && upstream.IsModelBusy(body) {
+				h.cfg.Pool.CooldownModelBusy(uid, model, "14003 model busy")
+				return
+			}
 			h.cfg.Pool.CooldownSoftForModel(uid, h.softCooldown(), retryAfter, model, "model rate limit")
 			return
 		}

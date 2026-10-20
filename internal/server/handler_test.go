@@ -623,6 +623,54 @@ func TestChatSoftCoolsOnRateLimitBody(t *testing.T) {
 	}
 }
 
+// TestChat14003StaysModelScopedShortWindow 14003「模型繁忙」只停 (号, 模型) 一个
+// 短窗口，不套 soft_rate 的 600s→2h 阶梯。
+//
+// 线上形态：国际版某个模型一忙，一个请求轮转 500ms 后换下一个号，上游是同一出口/
+// 同一模型的繁忙，新号也 14003；几个号 9 分钟内各中 2 次，整池冷 10 分钟。
+func TestChat14003StaysModelScopedShortWindow(t *testing.T) {
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		if authz == "Bearer at-bad" {
+			return 429, `{"code":14003,"msg":"too many requests","displayMsg":{"zh":"模型繁忙，请换模型或稍后重试"}}`, false
+		}
+		return 200, sseOK, true
+	})
+	p := testPoolWith(
+		&auth.Auth{UID: "bad", AccessToken: "at-bad", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "good", AccessToken: "at-good", ExpiresAt: 9999999999},
+	)
+	p.SetCredits("bad", 2000, 0)
+	p.SetCredits("good", 1000, 0)
+	// soft_rate 故意给 600s：14003 不得吃这条阶梯。
+	h := NewHandler(Config{Pool: p, Upstream: up, SoftCooldown: 600 * time.Second})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != 200 {
+		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
+	}
+	st, _ := p.Status("bad")
+	if st.Cooling {
+		t.Fatalf("14003 是模型忙，账号不得整体冷却: %+v", st)
+	}
+	if len(st.RateLimitedModels) != 1 || st.RateLimitedModels[0].Model != "glm-5.2" ||
+		st.RateLimitedModels[0].Kind != "rate_limit" {
+		t.Fatalf("rate_limited_models=%+v want 一条 glm-5.2", st.RateLimitedModels)
+	}
+	// 首档 60s；即便命中翻倍也封顶 3m，绝不能是 soft_rate 的 600s。
+	if d := time.Until(st.RateLimitedModels[0].Until); d <= 0 || d > 3*time.Minute+5*time.Second {
+		t.Errorf("model until=%v want (0,3m]", d)
+	}
+	// 换模型立刻可用：账号本身健康。
+	if got := p.PickByUIDForModel("bad", "hy3-x"); got == nil {
+		t.Error("14003 后该账号对其它模型必须仍可选")
+	}
+	if got := p.PickByUIDForModel("bad", "glm-5.2"); got != nil {
+		t.Errorf("该 (号,模型) 应被停车，不该还能选中：%+v", got)
+	}
+}
+
 func TestApplyErrorPolicySoftRateExponentialBackoff(t *testing.T) {
 	// 吸收上游语义：带解析重置时间的 body 对齐墙钟；无时间文案走有界退避，且
 	// **冷却中的重复触发不堆加**（旧「每次都翻倍」正是全池被推到 2h 封顶的元凶）。
