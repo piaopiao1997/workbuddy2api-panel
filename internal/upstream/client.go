@@ -2469,6 +2469,18 @@ func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain,
 		}
 		return
 	}
+	// global realm 个人号：官方 5.8.4 国际版已改口径，走 summary + paid/free 明细
+	// （见 billing_summary.go）。继续用下面 CN 那套分页 body 打国际站，拿回的形态
+	// 与 CN 不同（无 Accounts 树、容量是字符串小数），会解出恒 0 余额 → 积分保底
+	// 把可用号当耗尽号挡出选号。summary 失败才回落到 CN 路径（老路径兼容尝试）。
+	if a.IsGlobal() {
+		rm, tt, ex, ea, er, bk, gerr := c.globalUserResource(a, soon)
+		if gerr == nil {
+			return rm, tt, ex, ea, er, bk, nil
+		}
+		log.Printf("WARN: billing %s: global summary 失败，回落个人资源包路径: %v",
+			logfmt.Label(a.UID, a.Nickname), gerr)
+	}
 	now := time.Now()
 	body := map[string]any{
 		"PageNumber":               1,

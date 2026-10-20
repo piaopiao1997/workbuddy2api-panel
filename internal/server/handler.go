@@ -804,6 +804,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		body = prompt.Rewrite(body, prompt.Degraded)
 		degradedApplied = true
 	}
+	// 渠道校验兜底：上游要求 messages[0] 必须是 system（首条 user 直接 400
+	// 11-128「first message is not system prompt」，首条 developer 报
+	// unapproved channel）——2026-10-20 真机实测三条对照。custom/append 天然
+	// 以 system 开头，passthrough 透传客户端消息时可能首条就是 user，故这里统一
+	// 兜一次。只补首条缺失这一种情况，其余消息逐字不动。
+	body = prompt.EnsureSystemFirst(body, h.cfg.PromptText)
 
 	// outbound model 名由 upstream.prepareBody 在同一次 JSON 解析里剥成裸名
 	// （realm 前缀是网关侧路由协议，上游不认前缀）。这里不再提前做整段

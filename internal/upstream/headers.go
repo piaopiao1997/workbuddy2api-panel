@@ -4,7 +4,9 @@ package upstream
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -14,13 +16,19 @@ import (
 )
 
 const (
-	// defaultClientVersion 出站 WorkBuddy 客户端版本段（UA 的 `WorkBuddy/<ver>` 与
-	// 白名单头组的 X-IDE-Version）。对齐官方 WorkBuddy Desktop 分发包版本（5.5.4）。
-	// config upstream.client_version 可覆盖（空 = 内置默认）。
-	defaultClientVersion = "5.5.4"
-	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。对齐官方内置 CLI（2.137.1）。
-	// config upstream.cli_version 可覆盖（空 = 内置默认）。
-	defaultCliVersion = "2.137.1"
+	// defaultClientVersionCN / defaultClientVersionGlobal 出站 WorkBuddy 客户端版本段
+	// （UA 的 `<brand>/<ver>` 与白名单头组的 X-IDE-Version）。
+	//
+	// 取值来源：官方两个分发包的 resources/install-manifest.json —— 国内版 WorkBuddy
+	// 5.8.3（endpoint www.workbuddy.cn）、国际版 WorkBuddy AI 5.8.4（endpoint
+	// www.workbuddy.ai）。两版发版节奏不同，故**按 realm 分开**而不是共用一值：
+	// 国际版号用 CN 的 5.8.3 会与上游实际分发包版本对不上。
+	// config upstream.client_version 可覆盖（空 = 按 realm 取内置默认）。
+	defaultClientVersionCN     = "5.8.3"
+	defaultClientVersionGlobal = "5.8.4"
+	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。对齐官方内置 CLI（2.161.0，
+	// 两版分发包内置同一版本，见 cli/package.json）。config upstream.cli_version 可覆盖。
+	defaultCliVersion = "2.161.0"
 
 	originRefererCN     = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
@@ -36,12 +44,15 @@ func originRefererFor(a *auth.Auth) string {
 }
 
 // clientVersion 生效的 WorkBuddy 客户端版本：Client.ClientVersion 非空则取之，
-// 否则内置默认 defaultClientVersion。
-func (c *Client) clientVersion() string {
+// 否则按 realm 取内置默认（CN 5.8.3 / global 5.8.4）。
+func (c *Client) clientVersion(a *auth.Auth) string {
 	if c != nil && c.ClientVersion != "" {
 		return c.ClientVersion
 	}
-	return defaultClientVersion
+	if a != nil && a.IsGlobal() {
+		return defaultClientVersionGlobal
+	}
+	return defaultClientVersionCN
 }
 
 // cliVersion 生效的 CLI 版本：Client.CliVersion 非空则取之，否则内置默认 defaultCliVersion。
@@ -60,11 +71,24 @@ func (c *Client) cliVersion() string {
 // global 账号送错平台段（`WorkBuddy` 非 `WorkBuddy AI`）可能触发上游 403 code 11140
 // "request illegal" 风控。官方无任何 UA 随机化，故默认确定性。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
-	platform := "WorkBuddy"
+	brand := uaBrandFor(a)
+	ver := c.clientVersion(a)
+	return brand + "/" + ver + " " + brand + "/" + ver + " CLI/" + c.cliVersion()
+}
+
+// uaBrandFor 出站 UA 的品牌段：**全小写连字符**，按 realm 取。
+//
+// 为什么不是 "WorkBuddy" / "WorkBuddy AI"：真机抓包（国际版 5.8.4）实测出站 UA 是
+// `workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0` —— 品牌段来自客户端
+// buildUserAgent()（platform/applicationName 环境变量），取自 product.json 的
+// productName 但**转成小写连字符 slug**（"WorkBuddy AI" → `workbuddy-ai`，
+// "WorkBuddy" → `workbuddy`），不是展示名本体的驼峰形态。
+// 大驼峰形态与真实分发包对不上，是「被判定非官方客户端」的候选指纹之一。
+func uaBrandFor(a *auth.Auth) string {
 	if a != nil && a.IsGlobal() {
-		platform = "WorkBuddy AI"
+		return "workbuddy-ai"
 	}
-	return "WorkBuddy/" + c.clientVersion() + " " + platform + "/" + c.clientVersion() + " CLI/" + c.cliVersion()
+	return "workbuddy"
 }
 
 // defaultWorkBuddyUA 返回 CN 形态的默认 UA（默认账号形态即 CN，零回归兼容既有调用/测试）。
@@ -86,11 +110,18 @@ func (c *Client) userAgent(a *auth.Auth) string {
 // billingUA 白名单类（billing/checkin/banner）出站 UA：单段 `WorkBuddy/<clientVersion>`
 // （官方 banner 显式覆写形态，不带 CLI 段）。默认生效（伪造官方桌面端指纹）；
 // 显式 client_name="SaaS" 才不设 UA（还原旧行为，Go 默认 UA）。
-func (c *Client) billingUA() string {
+func (c *Client) billingUA(a *auth.Auth) string {
 	if c == nil || c.attributionClientName() == "SaaS" {
 		return ""
 	}
-	return "WorkBuddy/" + c.clientVersion()
+	// global 域的真机计费请求 UA 是 axios 默认串（实测 5.8.4 国际版：
+	// `/billing/meter/get-user-resource-*` 与 `-summary` 全部 `axios/1.16.1`），
+	// 与客户端自身 UA 不同——billing 层的 RestOperations 用的是 axios。
+	// CN 保持既有 `WorkBuddy/<ver>`（线上可用，不动）。
+	if a != nil && a.IsGlobal() {
+		return "axios/1.16.1"
+	}
+	return "WorkBuddy/" + c.clientVersion(a)
 }
 
 // resolveDeviceToken 解析本次请求的 X-Device-Token 取值。
@@ -177,6 +208,50 @@ func acceptLanguageFor(a *auth.Auth) string {
 	return "zh-CN"
 }
 
+// injectIdentityHeaders 注入官方客户端的身份头族（X-Auth-Method / X-Id-Source /
+// X-Userinfo）。三个头都是**按账号形态条件发送**，不是常量——官方客户端的
+// runIdentityHeaders()（cli 5.8.4 模块 30876 反编译）等价于：
+//
+//   有 uid           → X-User-Id = uid
+//   有 enterpriseId  → X-Enterprise-Id = enterpriseId
+//   有 auth.method   → X-Auth-Method = method（= JWT 的 token_source 声明）
+//   有 idSource      → X-Id-Source = idSource
+//   有 uid 且 (enterpriseId 或 idSource 或 method 任一存在) →
+//       X-Userinfo = base64(JSON{uin, owner_uin?, id_source?, token_source?})
+//
+// X-Userinfo 的三段都是**条件拼接**：缺哪个字段就不出现在 JSON 里，而不是写空串。
+// 个人号三个维度全缺——实测国际版个人账号的出站头里这三头都不存在，故本函数对纯
+// 个人号零注入。这不是省略，是与客户端一致：凭「个人号也该有 X-Userinfo」去补空值
+// 反而是伪造指纹，比不发更容易被识别。
+//
+// uin 段取 uid（不是账号的 uin 数字串）：反编译逻辑写的就是 {uin: n.uid}。
+func (c *Client) injectIdentityHeaders(req *http.Request, a *auth.Auth) {
+	if a == nil || a.UID == "" {
+		return
+	}
+	method := a.TokenSource()
+	if method != "" {
+		req.Header.Set("X-Auth-Method", method)
+	}
+	enterprise := strings.TrimSpace(a.EnterpriseID)
+	if enterprise == "" && method == "" {
+		// 个人号且 token 无 token_source：与官方客户端同样三头全不发。
+		return
+	}
+	payload := map[string]any{"uin": a.UID}
+	if enterprise != "" {
+		payload["owner_uin"] = enterprise
+	}
+	if method != "" {
+		payload["token_source"] = method
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	req.Header.Set("X-Userinfo", base64.StdEncoding.EncodeToString(raw))
+}
+
 // injectCodeBuddyRequest 在 req 注入 X-CodeBuddy-Request: 1。
 // billing 域未走 CommonHeaders，单独注入保证全出站覆盖（D1）。
 func (c *Client) injectCodeBuddyRequest(req *http.Request) {
@@ -239,7 +314,13 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 		c.injectGlobalChatHeaders(req, a)
 	}
 	// 用量归属头：默认伪造 WorkBuddy 桌面端指纹（client_name="SaaS" 还原旧行为）。
-	c.injectAttribution(req)
+	c.injectAttribution(req, a)
+	// X-Private-Data: true —— 官方 chat 出站恒带（applyGatewayHeaders 实测）。
+	// 语义是「请求含私有数据」，客户端无条件声明，故这里也常发。
+	req.Header.Set("X-Private-Data", "true")
+	// 身份头族（X-Auth-Method / X-Userinfo）：按账号形态条件注入，见
+	// injectIdentityHeaders——个人号三头全不发才是官方形态。
+	c.injectIdentityHeaders(req, a)
 	// 客户端 IP 透传（仅 PassthroughIP=true 且本次请求带 IP）。
 	c.injectClientIP(req, clientIP)
 	// 设备风控头：auth 每号 > config 全局 > 文件兜底；空则不注入。
@@ -348,7 +429,7 @@ func (c *Client) attributionClientName() string {
 // + X-IDE-Name/Type/Product="WorkBuddy" + X-IDE-Version=client_version，上游用量归因
 // 不再出现 client/agentPurpose 为空的「网关特征」。显式 ClientName="SaaS" 还原旧行为
 // （仅 X-Product="SaaS"，不设 X-IDE-*）；配其他值则四头跟随该值。
-func (c *Client) injectAttribution(req *http.Request) {
+func (c *Client) injectAttribution(req *http.Request, a *auth.Auth) {
 	name := c.attributionClientName()
 	if name == "SaaS" {
 		req.Header.Set("X-Product", "SaaS")
@@ -357,7 +438,7 @@ func (c *Client) injectAttribution(req *http.Request) {
 	req.Header.Set("X-Agent-Purpose", "conversation")
 	req.Header.Set("X-IDE-Name", name)
 	req.Header.Set("X-IDE-Type", name)
-	req.Header.Set("X-IDE-Version", c.clientVersion())
+	req.Header.Set("X-IDE-Version", c.clientVersion(a))
 	req.Header.Set("X-Product", name)
 }
 
@@ -406,7 +487,7 @@ func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Accept-Language", acceptLanguageFor(a))
 	if c != nil && c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
-	} else if ua := c.billingUA(); ua != "" {
+	} else if ua := c.billingUA(a); ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
 	if a.UID != "" {

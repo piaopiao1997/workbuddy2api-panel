@@ -45,7 +45,7 @@ func TestGlobalCatalogProbesDesktopUA(t *testing.T) {
 			ids = append(ids, "ide-only")
 		case strings.HasPrefix(ua, "CLI/"):
 			ids = append(ids, "cli-only")
-		case strings.HasPrefix(ua, "WorkBuddy/"):
+		case strings.HasPrefix(ua, "workbuddy-ai/"), strings.HasPrefix(ua, "workbuddy/"):
 			ids = append(ids, desktopOnly)
 		default:
 			t.Errorf("v3/config 探测带了非预期 UA: %q", ua)
@@ -116,7 +116,7 @@ func TestGlobalCatalogDesktopProbeFailureFallsBackToUnion(t *testing.T) {
 		ua := r.Header.Get("User-Agent")
 		var ids []string
 		switch {
-		case strings.HasPrefix(ua, "WorkBuddy/"):
+		case strings.HasPrefix(ua, "workbuddy-ai/"), strings.HasPrefix(ua, "workbuddy/"):
 			// 桌面族失败（模拟上游对该族 500）。
 			w.WriteHeader(http.StatusInternalServerError)
 			return

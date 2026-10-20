@@ -40,8 +40,9 @@ func TestReportDesktopEventFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report desktop: %v", err)
 	}
-	if gotUA != desktopUA {
-		t.Errorf("UA=%q want %q", gotUA, desktopUA)
+	// CN 账号 → 国内版形态；国际版形态由 TestDesktopUARealmBrand 单独钉。
+	if gotUA != desktopUACN {
+		t.Errorf("UA=%q want %q", gotUA, desktopUACN)
 	}
 	if len(got) != 1 {
 		t.Fatalf("events=%d want 1", len(got))
@@ -102,8 +103,8 @@ func TestSetAppearanceTheme(t *testing.T) {
 		if r.URL.Path != "/v2/user-asset/appearance/set" {
 			t.Errorf("path=%s want /v2/user-asset/appearance/set", r.URL.Path)
 		}
-		if r.Header.Get("User-Agent") != desktopUA {
-			t.Errorf("UA=%q want desktop UA", r.Header.Get("User-Agent"))
+		if r.Header.Get("User-Agent") != desktopUACN {
+			t.Errorf("UA=%q want desktop CN UA", r.Header.Get("User-Agent"))
 		}
 		raw, _ := io.ReadAll(r.Body)
 		json.Unmarshal(raw, &got)

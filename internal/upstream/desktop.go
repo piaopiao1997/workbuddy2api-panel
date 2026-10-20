@@ -29,8 +29,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -40,12 +42,39 @@ import (
 const (
 	desktopReportPath    = "/v2/report"
 	desktopAppearanceSet = "/v2/user-asset/appearance/set"
-	// desktopUA 实测桌面客户端 UA（5.5.6 内嵌 CLI 2.137.1）。
-	desktopUA = "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1"
+	// desktopVersion / desktopCommit / desktopReleaseDate 官方 5.8.4 分发包实测值
+	// （install-manifest.json 的 appVersion + /v2/report body 的 commit/releaseDate）。
+	// 与面板自身 client_version 分开：/v2/report 是「桌面端行为」指纹，应恒为桌面端版本。
+	desktopVersion     = "5.8.4"
+	desktopCommit      = "73952edb48da46bd0b244661efe22f4f247c4977"
+	desktopReleaseDate = int64(1792063084107)
+	// desktopUA 桌面端出站 UA（5.8.4 + 内置 CLI 2.161.0，真机实测形态）。
+	// 品牌段按 realm：国际版 `workbuddy-ai`，国内版 `workbuddy`（同 uaBrandFor）。
+	desktopUA   = "workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"
+	desktopUACN = "workbuddy/5.8.3 workbuddy/5.8.3 CLI/2.161.0"
 )
 
 // desktopBase 桌面端 /v2/report 与 user-asset 走 chatBase（copilot.tencent.com）。
 func (c *Client) desktopBase(a *auth.Auth) string { return c.chatBase(a) }
+
+// desktopUAFor 桌面端 UA：国际版 workbuddy-ai/5.8.4、国内版 workbuddy/5.8.3。
+func desktopUAFor(a *auth.Auth) string {
+	if a != nil && a.IsGlobal() {
+		return desktopUA
+	}
+	return desktopUACN
+}
+
+// desktopHost 返回 X-Domain 用的裸主机名（与真机一致：www.workbuddy.ai /
+// copilot.tencent.com）。从 base 里剥 scheme 与路径；解析失败时退回 base 原串，
+// 保证不会因为 URL 畸形而把该头发成空串（头缺失同样会触发渠道校验）。
+func (c *Client) desktopHost(a *auth.Auth) string {
+	base := c.desktopBase(a)
+	if u, err := url.Parse(base); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(base, "https://"), "http://"), "/")
+}
 
 // deriveID 由 uid 稳定派生一个 36 位 hex 设备标识（machineId/qimei36 复用），
 // 幂等：同一账号每次生成相同值，模拟固定设备。
@@ -67,22 +96,25 @@ func desktopFingerprint(a *auth.Auth) map[string]any {
 		"username":     a.Nickname,
 		"userNickname": a.Nickname,
 		"product":      "SaaS",
-		"releaseDate":  int64(1789036585355),
-		"commit":       "5f9692923c93033111c51ad7b003eb80204a9b75",
+		"releaseDate":  desktopReleaseDate,
+		"commit":       desktopCommit,
 		"ideName":      "WorkBuddy",
 		"ideType":      "WorkBuddy",
-		"ideVersion":   "5.5.6",
+		"ideVersion":   desktopVersion,
 		"machineId":    deriveID(a, "machine"),
 		"sessionId":    deriveID(a, "session"),
 		"extName":      "workbuddy-desktop",
-		"extVersion":   "5.5.6",
+		"extVersion":   desktopVersion,
 		"os":           "win32",
 		"arch":         "x64",
-		"osVersion":    "10.0.26220",
-		"cpuCores":     20,
-		"memorySize":   24,
-		"timestamp":    now,
-		"presentAt":    now,
+		// osVersion / cpuModel / cpuCores / memorySize 是真机上报名（5.8.4 实测）：
+		// 这些字段上游侧用于设备侧写，缺 cpuModel 是最明显的「非桌面端」特征。
+		"osVersion":  "10.0.28000",
+		"cpuModel":   "11th Gen Intel(R) Core(TM) i5-11320H @ 3.20GHz",
+		"cpuCores":   8,
+		"memorySize": 16,
+		"timestamp":  now,
+		"presentAt":  now,
 	}
 }
 
@@ -116,8 +148,12 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	req.Header.Set("User-Agent", desktopUA)
-	req.Header.Set("X-Domain", c.desktopBase(a))
+	req.Header.Set("User-Agent", desktopUAFor(a))
+	// X-Domain 是**主机名**不是 URL：真机实测 `X-Domain: www.workbuddy.ai`，
+	// 而 desktopBase 返回的是带 scheme 的 base，直接塞进去会发成
+	// `https://www.workbuddy.ai`——与本仓其它头（chat/billing 用 DomainValue 的裸域）
+	// 也不自洽，是最容易被上游按「非客户端形态」识别出来的一处。
+	req.Header.Set("X-Domain", c.desktopHost(a))
 	req.Header.Set("X-Product", "SaaS")
 	req.Header.Set("X-Request-ID", deriveID(a, "req")+fmt.Sprintf("%d", time.Now().UnixNano()%1e6))
 	if a.UID != "" {
@@ -217,7 +253,7 @@ func (c *Client) SetAppearanceTheme(a *auth.Auth, resourceKey string) error {
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	req.Header.Set("User-Agent", desktopUA)
+	req.Header.Set("User-Agent", desktopUAFor(a))
 	req.Header.Set("X-Product", "SaaS")
 	if a.UID != "" {
 		req.Header.Set("X-User-Id", a.UID)
@@ -394,7 +430,7 @@ func (c *Client) MarketExpertList(a *auth.Auth, expertType string) ([]MarketExpe
 	}
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", desktopUA)
+	req.Header.Set("User-Agent", desktopUAFor(a))
 	req.Header.Set("X-Domain", c.chatBase(a))
 	req.Header.Set("X-Product", "SaaS")
 	if a.UID != "" {
@@ -442,10 +478,16 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	h.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "text/event-stream")
-	h.Set("User-Agent", desktopUA)
-	h.Set("X-Domain", c.chatBase(a))
+	h.Set("User-Agent", desktopUAFor(a))
+	// X-Domain 是主机名不是 URL（真机实测 www.workbuddy.ai）。原先塞的是带 scheme
+	// 的 chatBase，与 /v2/report 同一处笔误，一并改正。
+	h.Set("X-Domain", c.desktopHost(a))
 	h.Set("X-Product", "SaaS")
+	h.Set("X-Private-Data", "true")
 	h.Set("X-User-Id", a.UID)
+	// 身份头族（企业与带 token_source 的号才有）：与 ChatHeaders 同源，
+	// 避免这条手搓头路径比主 chat 路径少一族指纹。
+	c.injectIdentityHeaders(req, a)
 	h.Set("X-Conversation-ID", conversationID)
 	// 渠道校验三件套的另两件（缺任一头上游 400 code=11-128 "conversation id missing"）：
 	// 该路径手搓头绕过 ChatHeaders，此前只带了 Conversation-ID。

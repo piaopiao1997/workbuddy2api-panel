@@ -92,6 +92,75 @@ func Rewrite(body []byte, systemPrompt string) []byte {
 	return out
 }
 
+// EnsureSystemFirst 保证 messages[0] 是 role=system —— 上游**渠道校验**的硬要求。
+//
+// 为什么必须做（2026-10-20 真机实测，国际版 5.8.4）：上游对首条消息不是 system
+// 的请求直接 400 code=11-128「first message is not system prompt」，displayTips 与
+// 「非官方客户端」同一句。三条实测对照：
+//
+//	首条 user       → 400 11-128 "first message is not system prompt"
+//	首条 developer  → 400 11-128 "Illegal API invocation from an unapproved channel"
+//	首条 system     → 200（同一 body 其余部分不变，模型正常回包）
+//
+// 也就是说这不是内容策略、不是账号问题：**首条角色本身**是渠道校验的一部分。
+// custom / append 两种模式本来就以网关 system 开头，唯独 passthrough 会原样透传
+// 客户端消息——客户端不带 system（大量 SDK / 手搓 curl 都不带）时首条是 user，
+// 于是每一次请求都必然 11-128，账号被反复计成「渠道校验拦截」而全池冷却，
+// 表象就是「国际版账号全被禁用，但网页还能聊」（issue #231）。
+//
+// 语义边界：只在**首条不是 system/developer 时**补一条，位置在最前；首条已是
+// system/developer 时只做 developer→system 归一（上游不认 developer），其余消息
+// 逐字不动。fallback 为空时用 prompt.Degraded（中性提示词）兜底，绝不因为没配
+// 提示词就不补。
+func EnsureSystemFirst(body []byte, fallback string) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return body
+	}
+	msgs, ok := obj["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		// 无 messages / 空数组：没有「首条」可补，交给上游按原样报错（不凭空造对话）。
+		return body
+	}
+	first, ok := msgs[0].(map[string]any)
+	if !ok {
+		return body
+	}
+	role, _ := first["role"].(string)
+	switch role {
+	case "system":
+		return body // 已是官方形态，零改动。
+	case "developer":
+		// developer 首条同样被拒（报的是另一句 unapproved channel）。就地改成 system，
+		// 内容逐字保留——不删不并，避免动客户端语义。
+		first["role"] = "system"
+		if out, err := json.Marshal(obj); err == nil {
+			return out
+		}
+		return body
+	}
+	prompt := fallback
+	if prompt == "" {
+		prompt = Degraded
+	}
+	if prompt == "" {
+		return body
+	}
+	// 首条是 user/assistant/tool：在最前补一条网关 system，其余逐字不动。
+	rewritten := make([]any, 0, len(msgs)+1)
+	rewritten = append(rewritten, map[string]any{"role": "system", "content": prompt})
+	rewritten = append(rewritten, msgs...)
+	obj["messages"] = rewritten
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 // Append 解析 OpenAI 请求体并在"开头连续 system/developer 块"之后插入一条
 // 网关自有 system 提示词（issue #129 append 模式）：
 //   - 开头连续块 = 从 messages[0] 起向后 role 为 system/developer（精确字符串
