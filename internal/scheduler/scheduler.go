@@ -65,6 +65,9 @@ type Config struct {
 	SweepRunner func() (int, string)
 	// JitterMinutes 名义整点之后的确定性偏移窗口。0 = 精确整点。
 	JitterMinutes int
+	// RunStampFile 启动补跑去重记录的落盘路径（见 runstamps.go）。空 = 不持久化，
+	// 每次重启都补一轮（旧行为）。
+	RunStampFile string
 }
 
 // Scheduler 调度器。
@@ -75,6 +78,9 @@ type Scheduler struct {
 	// 避免同日多趟对上游重试轰炸；进程重启即清零（无需持久化）。
 	mu         sync.Mutex
 	adoptTried map[string]string
+
+	// stampMu 串行化补跑标记文件的读写（见 runstamps.go）。
+	stampMu sync.Mutex
 
 	// schedMu 保护排程参数（时点/开关）；Reconfigure 可在运行期热改（面板保存配置时调用）。
 	// rearmSchedule/rearmBalance/rearmSweep 是「排程已变，立即重算」通知：Run 与两个
@@ -365,6 +371,9 @@ func (s *Scheduler) missedToday(now time.Time) []taskKind {
 			continue // 未配小时数：本来就不跑
 		}
 		if sl.at.Year() != now.Year() || sl.at.YearDay() != now.YearDay() {
+			if s.ranToday(sl.kind, now) {
+				continue // 今天已补跑过一轮：重启不该再把同样的请求打一遍
+			}
 			out = append(out, sl.kind)
 		}
 	}
@@ -484,6 +493,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 			return // 开机瞬间网络/DNS 可能未就绪（同 issue #152 的宽限口径）
 		}
 		s.runBatch(ctx, missed)
+		s.markRan(missed, time.Now())
 	}
 	for {
 		next, kinds := s.nextWake(time.Now())
