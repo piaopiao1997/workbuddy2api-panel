@@ -388,6 +388,44 @@ func TestChatStreamWireBodySanitizeDisabled(t *testing.T) {
 	}
 }
 
+// DSH 的身份句是短语级指纹：上游按逐字匹配拦（400 11-128 unapproved channel），
+// 换一个词即绕过。钉住三条：命中改写、只含品牌词也走净化（特征预检不得漏）、
+// 改写结果不再含原始短语（可重复处理）。
+func TestDeepSeekHarnessBrandRewritten(t *testing.T) {
+	in := "You are an AI agent powered by DeepSeek Harness.\n\nCheck the exit code."
+	out := sanitizeText(in)
+	if strings.Contains(out, "DeepSeek Harness") || !strings.Contains(out, "DeepSeekRuntime") {
+		t.Fatalf("brand word not rewritten: %q", out)
+	}
+	if !strings.HasPrefix(out, "You are an AI agent powered by DeepSeekRuntime.") {
+		t.Errorf("surrounding text changed: %q", out)
+	}
+	if again := sanitizeText(out); again != out {
+		t.Errorf("not idempotent: %q -> %q", out, again)
+	}
+}
+
+// 预检快路径：文本只含品牌词、不含任何其它指纹，也必须进入净化。
+func TestDeepSeekHarnessDetected(t *testing.T) {
+	if !hasFingerprint("You are interacting through the DeepSeek Harness Web GUI.") {
+		t.Error("brand word should hit the fast path")
+	}
+}
+
+// 走完 prepareBody 全链路：system 与 user 里的品牌词都出站前改掉。
+func TestPrepareBodyRewritesDeepSeekHarness(t *testing.T) {
+	body := []byte(`{"model":"deepseek-v4.1-flash","messages":[` +
+		`{"role":"system","content":"You are an AI agent powered by DeepSeek Harness."},` +
+		`{"role":"user","content":"the DeepSeek Harness checkout is here"}]}`)
+	out, _, _ := prepareBodyOpt(body, true, nil, nil, nil, "", "", false)
+	if strings.Contains(string(out), "DeepSeek Harness") {
+		t.Fatalf("brand word survived: %s", out)
+	}
+	if strings.Count(string(out), "DeepSeekRuntime") != 2 {
+		t.Errorf("expected both messages rewritten: %s", out)
+	}
+}
+
 // newTestUpstream 起一个假上游并捕获请求。
 func newTestUpstream(t *testing.T, h http.HandlerFunc) *httptest.Server {
 	t.Helper()

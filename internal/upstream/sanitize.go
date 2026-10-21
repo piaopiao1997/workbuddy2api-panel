@@ -13,13 +13,14 @@ import (
 // sanitizeFeatures 特征预检：任一命中才进入净化（strings.Contains 快速路径，
 // 普通请求全不中 → 原样返回，零分配）。
 var sanitizeFeatures = []string{
-	"x-anthropic-billing-header",                      // header 键值段键名
-	"cc_entrypoint=",                                  // 尾随裸键值（截断前缀即可命中）
-	"You are Claude Code",                             // 身份句（截断前缀即可命中）
-	"Main branch (",                                   // 注入指令句（截断前缀即可命中）
+	"x-anthropic-billing-header", // header 键值段键名
+	"cc_entrypoint=",             // 尾随裸键值（截断前缀即可命中）
+	"You are Claude Code",        // 身份句（截断前缀即可命中）
+	"Main branch (",              // 注入指令句（截断前缀即可命中）
 	"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
 	"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
 	"11128",                                           // 上游反探测：裸数字错误码
+	"DeepSeek Harness",                                // DSH 身份句品牌词：上游按「非官方渠道」整单拦（11-128）
 }
 
 // sanitizeHdrRe 剥离层：header 键名即触发（与值无关），整段删除。
@@ -72,9 +73,17 @@ var sanitizeRewrites = [][2]string{
 		// 相邻的 11148 / 11101 / 11115 / 99999 均放行）。11128 正是本类拦截自身的错误码，
 		// 上游据此识别"在讨论/回显其内部错误码"的请求。
 		// 代价：用户对话中任何 11128 都会被改写——但这串数字出现在请求里本身就是拦截条件，
-		// 不改写必然失败。插入连字符保留可读性与指代（零宽空格无效，实测上游会归一化）。
+		// 不改写必然失败。插入连字符保留可读性与指代（该数字串上零宽空格无效，实测上游会归一化）。
 		"11128",
 		"11-128",
+	},
+	{
+		// DSH 的身份句（@deepseek-ai/dsh-system-prompt 注入的 harness:identity 段）被上游
+		// 当成「非官方渠道调用」整单拦截：400 11-128 Illegal API invocation from an
+		// unapproved channel。实测换一词即绕过（与插 U+200B 等效，但可见、可 diff）。
+		// 按短语全局替换而非只认开头：同一品牌词在长提示词正文里还会出现多次。
+		"DeepSeek Harness",
+		"DeepSeekRuntime",
 	},
 }
 
@@ -113,44 +122,6 @@ func hasFingerprint(text string) bool {
 		}
 	}
 	return sanitizeBareHdrRe.MatchString(text)
-}
-
-// sanitizeSystemPrefix 仅匹配系统提示词开头的完整身份句，保留其余内容。
-// 已插入 U+200B 后不再匹配，重复处理不会叠加零宽空格。
-func sanitizeSystemPrefix(text string) string {
-	const prefix = "You are an AI agent powered by DeepSeek Harness."
-	if !strings.HasPrefix(text, prefix) {
-		return text
-	}
-	return "You are an AI agent powered by DeepSeek\u200B Harness." + text[len(prefix):]
-}
-
-// sanitizeSystemContentPrefix 兼容字符串与文本块数组；数组只检查首个 text 块，
-// 后续块属于提示词正文，不作为独立前缀匹配。图片等非文本块保持原样。
-func sanitizeSystemContentPrefix(v any) (any, bool) {
-	switch c := v.(type) {
-	case string:
-		s := sanitizeSystemPrefix(c)
-		return s, s != c
-	case []any:
-		for _, p := range c {
-			m, ok := p.(map[string]any)
-			if !ok || m["type"] != "text" {
-				continue
-			}
-			text, ok := m["text"].(string)
-			if !ok {
-				return c, false
-			}
-			s := sanitizeSystemPrefix(text)
-			if s != text {
-				m["text"] = s
-				return c, true
-			}
-			return c, false
-		}
-	}
-	return v, false
 }
 
 // sanitizeContent 兼容字符串与多模态数组；只动 text part，image 等 part 不动。
@@ -225,14 +196,6 @@ func sanitizeMessages(messages []any) bool {
 		// content 与 tool_calls 各自独立判断：content 可以为 null（工具调用轮），
 		// 早期版本在此 continue，导致这类消息的 tool_calls 完全不被净化。
 		if c, ok := m["content"]; ok {
-			role, _ := m["role"].(string)
-			if role == "system" || role == "developer" {
-				if nc, ch := sanitizeSystemContentPrefix(c); ch {
-					c = nc
-					m["content"] = nc
-					changed = true
-				}
-			}
 			if nc, ch := sanitizeContent(c); ch {
 				m["content"] = nc
 				changed = true
