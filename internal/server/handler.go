@@ -887,7 +887,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if !busyWaited {
 				if blk := h.cfg.Pool.ModelBlockedForRealm(bareModel, realm); blk.Blocked {
 					if d := busyWaitFor(blk, time.Now(), busyWaitCap); d > 0 {
-						if !sleepCtx(r.Context(), jitterDur(d)) {
+						w := waitPast(d)
+						log.Printf("busy-wait: model=%s realm=%q %d account(s) busy, waiting %s then retry once (issue #46)", bareModel, realm, blk.Count, w.Round(time.Millisecond))
+						if !sleepCtx(r.Context(), w) {
 							break // 客户端已断连：不必再等
 						}
 						busyWaited = true
@@ -1392,6 +1394,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 换号重试必然同样失败，客户端不该按可重试错误处理。
 	// 积分耗尽细化（fork 自有）：与上面的 errors.As 分支互斥（无上游原文时才成立），
 	// 且优先于模型级阻塞——池里一个号都试不出来时，「没积分」比「换模型」更准确。
+	// 轮转耗尽 / WAF 止损等其它退出路径不经过选号失败分支，modelBlock 还是零值：
+	// 在这里补一次快照。否则同一件「全池该模型只是忙」的事，走选号失败是
+	// 503 model_busy + Retry-After，走轮转耗尽却是 429 rate_limit_exceeded 且没有
+	// Retry-After（MaxRotate=1 时必现）。
+	if !modelBlock.Blocked {
+		modelBlock = h.cfg.Pool.ModelBlockedForRealm(bareModel, realm)
+	}
 	if ue == nil && h.cfg.Pool != nil && h.cfg.Pool.AllHardCreditForRealm(realm) {
 		// 池里一个可试的号都没有，且挡路的全是余额耗尽冷却：把笼统的「无可用账号」
 		// 细化成积分耗尽语义——客户端对着必然失败的请求重试只是白等。
