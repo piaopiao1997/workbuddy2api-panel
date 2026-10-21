@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"time"
@@ -45,6 +46,12 @@ func travelDay(t time.Time) string {
 // 401/查询失败只跳过该账号本轮（不强刷 token，交 22:00 keepalive）；
 // 账号间限速 travelAccountDelay。
 func (s *Scheduler) RunTravelNow() {
+	s.runTravel(context.Background(), false)
+}
+
+// runTravel 旅行巡检遍历。spread=true（排程路径）时按账号级偏移错开，见 spread.go。
+func (s *Scheduler) runTravel(ctx context.Context, spread bool) {
+	plan := s.spreadPlan(taskTravel, spread, cst.Now())
 	first := true
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled {
@@ -59,6 +66,9 @@ func (s *Scheduler) RunTravelNow() {
 		}
 		if a.IsEnterprise() {
 			continue // 企业版门控：无成长体系（成长端点上游 403），不发起任何上游调用
+		}
+		if !plan.wait(ctx, st.UID) {
+			return // ctx 取消：剩余账号下轮再巡
 		}
 		if !first {
 			time.Sleep(travelAccountDelay)

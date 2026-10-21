@@ -107,6 +107,14 @@ type Config struct {
 		GrowthConcurrency int `json:"growth_concurrency"`
 		// JitterMinutes 0 = 精确整点。正值把触发时刻摊在该窗口内，同一小时偏移固定。
 		JitterMinutes int `json:"jitter_minutes"`
+		// AccountSpreadMinutes 账号级摊开窗口（issue #45）：0 = 关闭（同一秒打全池）。
+		// >0 时排程触发的签到 / 旅行 / 活跃上报 / 保活 / 夜猫子把每个账号放在窗口内
+		// 各自的偏移上（按 账号+任务+日期 哈希，当天固定），面板手动触发不受影响。
+		// 窗口应小于相邻时点的间隔，否则上一批会跨过下一个时点。
+		AccountSpreadMinutes int `json:"account_spread_minutes"`
+		// AccountSpreadMinGapSeconds 同批两个账号的最小间隔（偏移撞车时把后者推开）。
+		// 0 = 只做随机。账号数 × 该值接近窗口时末尾会挤在一起。
+		AccountSpreadMinGapSeconds int `json:"account_spread_min_gap_seconds"`
 
 		// 余额后台周期刷新：两次签到时点之间 credits 也能保持新鲜（面板/状态观测用）。
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
@@ -535,6 +543,16 @@ func applyEnv(c *Config) {
 			c.Schedule.JitterMinutes = n
 		}
 	}
+	if v := os.Getenv("WB2A_SCHEDULE_ACCOUNT_SPREAD_MINUTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Schedule.AccountSpreadMinutes = n
+		}
+	}
+	if v := os.Getenv("WB2A_SCHEDULE_ACCOUNT_SPREAD_MIN_GAP_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Schedule.AccountSpreadMinGapSeconds = n
+		}
+	}
 	if v := os.Getenv("WB2A_ADMIN_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.Admin.Enabled = b
@@ -594,6 +612,8 @@ func (c *Config) EnvironmentManagedFields() []string {
 		{"WB2A_PROMPT_MODE", "prompt.mode", ""}, {"WB2A_PROMPT_FILE", "prompt.file", ""},
 		{"WB2A_EXPIRING_SOON", "pool.expiring_soon", ""}, {"WB2A_PREFER_EXPIRING", "pool.prefer_expiring", "bool"},
 		{"WB2A_SCHEDULE_JITTER_MINUTES", "schedule.jitter_minutes", "int"},
+		{"WB2A_SCHEDULE_ACCOUNT_SPREAD_MINUTES", "schedule.account_spread_minutes", "int"},
+		{"WB2A_SCHEDULE_ACCOUNT_SPREAD_MIN_GAP_SECONDS", "schedule.account_spread_min_gap_seconds", "int"},
 		{"WB2A_ADMIN_ENABLED", "admin.enabled", "bool"}, {"WB2A_ADMIN_AUDIT_ENABLED", "admin.audit_enabled", "bool"},
 		{"WB2A_ADMIN_AUDIT_FILE", "admin.audit_file", ""},
 		{"WB2A_METRICS_ENABLED", "metrics.enabled", "bool"},
@@ -799,6 +819,12 @@ func (c *Config) normalize() error {
 	}
 	if c.Schedule.JitterMinutes < 0 || c.Schedule.JitterMinutes > 1440 {
 		return fmt.Errorf("schedule.jitter_minutes: %d 非法（0 = 关闭，上限 1440）", c.Schedule.JitterMinutes)
+	}
+	if c.Schedule.AccountSpreadMinutes < 0 || c.Schedule.AccountSpreadMinutes > 1440 {
+		return fmt.Errorf("schedule.account_spread_minutes: %d 非法（0 = 关闭，上限 1440）", c.Schedule.AccountSpreadMinutes)
+	}
+	if c.Schedule.AccountSpreadMinGapSeconds < 0 || c.Schedule.AccountSpreadMinGapSeconds > 3600 {
+		return fmt.Errorf("schedule.account_spread_min_gap_seconds: %d 非法（0 = 只做随机，上限 3600）", c.Schedule.AccountSpreadMinGapSeconds)
 	}
 	if c.Budget.DailyCreditLimit < 0 {
 		return fmt.Errorf("budget.daily_credit_limit: %v 不得为负；0 = 不限", c.Budget.DailyCreditLimit)

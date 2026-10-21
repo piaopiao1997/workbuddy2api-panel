@@ -205,6 +205,9 @@ func main() {
 		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
 		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
 		JitterMinutes:          cfg.Schedule.JitterMinutes,
+		// 账号级摊开（issue #45）：默认 0/0 = 关闭，同一秒打全池。
+		AccountSpreadMinutes:       cfg.Schedule.AccountSpreadMinutes,
+		AccountSpreadMinGapSeconds: cfg.Schedule.AccountSpreadMinGapSeconds,
 		// 启动补跑去重：与 state.json 同目录，重启多次只在当天补一轮。
 		RunStampFile: filepath.Join(filepath.Dir(cfg.StateFile), "task-runs.json"),
 	})
@@ -246,6 +249,10 @@ func main() {
 	}
 	if cfg.Schedule.JitterMinutes > 0 {
 		log.Printf("排程抖动：各任务在名义整点后 0-%d 分钟（schedule.jitter_minutes）", cfg.Schedule.JitterMinutes)
+	}
+	if cfg.Schedule.AccountSpreadMinutes > 0 {
+		log.Printf("账号摊开：账号遍历型任务在 %d 分钟内按账号错开，最小间隔 %d 秒（schedule.account_spread_minutes）",
+			cfg.Schedule.AccountSpreadMinutes, cfg.Schedule.AccountSpreadMinGapSeconds)
 	}
 	switch {
 	case !cfg.Schedule.BalanceRefreshEnabled:
@@ -675,7 +682,9 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		GrowthDisabled:         !newCfg.Schedule.GrowthEnabled,
 		IncludeDisabledInTasks: newCfg.Schedule.IncludeDisabledInTasks,
 
-		JitterMinutes: newCfg.Schedule.JitterMinutes,
+		JitterMinutes:              newCfg.Schedule.JitterMinutes,
+		AccountSpreadMinutes:       newCfg.Schedule.AccountSpreadMinutes,
+		AccountSpreadMinGapSeconds: newCfg.Schedule.AccountSpreadMinGapSeconds,
 	})
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
 	sch.SetTaskSweepInterval(newCfg.TaskSweepInterval)
