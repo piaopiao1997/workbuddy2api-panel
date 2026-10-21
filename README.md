@@ -444,6 +444,8 @@ curl -s http://localhost:7863/v1/responses \
 1. **提示词体系**（解决 **system / developer 来源**的误报）：由 `prompt.mode` 控制
 2. **指纹脱敏**（兜底 **用户 / assistant 消息**里的指纹串）：由 `features.sanitize_blacklist_fingerprints` 控制
 
+开启指纹脱敏时，`system` / `developer` 提示词若以 `You are an AI agent powered by DeepSeek Harness.` 开头（大小写敏感），仅在该前缀的 `DeepSeek` 后插入一个 U+200B 零宽空格，得到 `DeepSeek\u200B Harness`（此处用转义写法展示），其余内容保留。字符串与文本块数组均支持（数组只检查首个 `text` 块）；正文中的同句、用户 / assistant / tool 内容不应用此规则，重复处理不会重复插入。此规则也适用于 `passthrough` 模式，关闭指纹脱敏后不改写。
+
 | 模式 | 语义 |
 |---|---|
 | `custom`（默认） | 出站前用网关自有提示词**替换**客户端 system / developer 消息（删除全部 system / developer，头部插入单条 system）；user / assistant / tool 消息逐字不动 |
