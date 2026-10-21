@@ -214,6 +214,7 @@ git branch -D pr/<起个名字>                # 本地清掉；远端 public �
 | `44e2ebb` | 删号前自动落 state 取证备份 + `cmd/probechat` | `internal/panel/panel.go`、`internal/pool/persist.go` |
 | `b3c5c2b` | 补偿/礼包不再把「可领额度」冒充「本次到账」 | `internal/scheduler/{compensation,scheduler}.go` |
 | `2971e04` | 全冷却兜底路径补检查 `reserve_credits` | `internal/pool/pick.go` |
+| `ff5ad60` | 熔断出口自动复通探测 + 全 dead 不再静默回落直连（10-21，对齐 issue #39 结论） | `internal/proxypool/probe.go`（新）、`proxypool.go`、`internal/upstream/transport.go`、`cmd/server/config.go`、`cmd/server/main.go` |
 
 ### 为什么每次同步都容易撞冲突
 
