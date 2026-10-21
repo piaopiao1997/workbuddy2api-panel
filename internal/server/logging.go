@@ -139,7 +139,11 @@ type chatStatsReader struct {
 	thinkTokens int
 	hasThink    bool
 	errorFrame  bool
-	pend        []byte // 已读未返回的行缓存
+	// issue #44 观测：本流是否出现过非空 delta.tool_calls、最后一个非空 finish_reason。
+	// 两者组合用于识别「声明了 tools 却拿到 stop + 零 tool_calls」的静默回合。
+	sawToolCalls bool
+	finishReason string
+	pend         []byte // 已读未返回的行缓存
 }
 
 // newChatStatsReaderSince 以 since 为 TTFB 计时起点（通常是请求进入 handler 的时刻）。
@@ -156,6 +160,12 @@ func (s *chatStatsReader) Thinking() (int, bool) { return s.thinkTokens, s.hasTh
 
 // Tokens 返回末帧 usage.completion_tokens 与是否缺失；无 usage 时 ok=false。
 func (s *chatStatsReader) Tokens() (int, bool) { return s.completionTokens, s.hasCompletionTokens }
+
+// SawToolCalls 报告本流是否出现过非空 delta.tool_calls（issue #44 观测）。
+func (s *chatStatsReader) SawToolCalls() bool { return s.sawToolCalls }
+
+// FinishReason 本流最后一个非空 finish_reason；上游没给过则为空串。
+func (s *chatStatsReader) FinishReason() string { return s.finishReason }
 
 // Credit 返回末帧 usage.credit（本次真实扣费积分）与是否缺失。
 func (s *chatStatsReader) Credit() (float64, bool) { return s.credit, s.hasCredit }
@@ -215,6 +225,14 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 	var chunk struct {
 		Error json.RawMessage `json:"error"`
+		// issue #44：只取 delta.tool_calls 与 finish_reason 两个字段。encoding/json
+		// 会跳过未声明的键（含 content），不为正文分配内存。
+		Choices []struct {
+			Delta struct {
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
 		Usage *struct {
 			PromptTokens     *int `json:"prompt_tokens"`
 			CompletionTokens *int `json:"completion_tokens"`
@@ -230,14 +248,23 @@ func (s *chatStatsReader) parseSSELine(line string) {
 			PromptCacheMissTokens *int            `json:"prompt_cache_miss_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
-		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
-			s.errorFrame = true
-		}
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
 		return
 	}
 	if len(chunk.Error) > 0 {
 		s.errorFrame = true
+	}
+	for _, c := range chunk.Choices {
+		// 上游每帧都带 "tool_calls":[]（空数组），所以判据是长度而不是字段存在。
+		if len(c.Delta.ToolCalls) > 0 {
+			s.sawToolCalls = true
+		}
+		if c.FinishReason != "" {
+			s.finishReason = c.FinishReason
+		}
+	}
+	if chunk.Usage == nil {
+		return
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true

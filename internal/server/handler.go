@@ -1212,6 +1212,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				log.Printf("WARN: [server] stream acct=%s model=%s: saw %d native tool call block(s) but repaired none (tool names known=%d)",
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, m, len(declaredTools))
 			}
+			// issue #44：声明了 tools 却拿到 finish_reason=stop 且全流零 tool_calls ——
+			// 上游把这个形态当正常收尾，客户端据此认为回合完成、工具一次没跑，用户
+			// 只能手动催一句。此前网关侧完全无痕（这是定位困难的主因），这里只记日志
+			// 并非把流改成错误：模型「判断不需要工具、直接回答」是合法行为，强行改写成
+			// 错误会让这类正常回合反复重试、每次都真实计费。
+			if len(declaredTools) > 0 && !stats.SawToolCalls() && stats.FinishReason() == "stop" {
+				log.Printf("WARN: [server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (silent stop; client may treat the turn as complete)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, len(declaredTools))
+			}
 			st.ttfb = stats.TTFB()
 			// usage 缺失时保留 chatStat.toks 的 -1 哨兵（观测缺失 → 显示 "-"），
 			// 不写入零值——否则「没观测到 usage」被伪造成「测得 0 token」，
