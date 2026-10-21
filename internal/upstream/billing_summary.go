@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 const (
@@ -235,8 +236,8 @@ func (c *Client) globalPackageDetails(a *auth.Auth, codes []string) []packageDet
 		"PageSize":             200,
 		"PackageCodes":         codes,
 		"Status":               []int{0, 3},
-		"SlicePeriodStartTime": now.Format("2006-01-02") + " 00:00:00",
-		"SlicePeriodEndTime":   now.Format("2006-01-02") + " 23:59:59",
+		"SlicePeriodStartTime": cst.Day(now) + " 00:00:00",
+		"SlicePeriodEndTime":   cst.Day(now) + " 23:59:59",
 	}
 	var out []packageDetail
 	for _, req := range []struct {

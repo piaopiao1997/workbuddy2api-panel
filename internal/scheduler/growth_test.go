@@ -4,6 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 // TestNextWakeGrowthIndependent 成长任务队列有独立时点（默认 11:00）。
@@ -16,8 +18,8 @@ func TestNextWakeGrowthIndependent(t *testing.T) {
 		BlackcatHours:  []int{23},
 		GrowthHours:    []int{11},
 	})
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 10, 30, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 11, 11, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 10, 30, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 11, 11, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v（成长队列 11:00 独立时点）", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskGrowth {
@@ -36,8 +38,8 @@ func TestNextWakeGrowthDisabled(t *testing.T) {
 		KeepaliveDisabled: true,
 		BlackcatDisabled:  true,
 	})
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 10, 30, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 12, 9, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 10, 30, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 12, 9, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v（成长禁用 → 跳过 11:00）", at, want)
 	}
 	if hasKind(kinds, taskGrowth) {
@@ -78,14 +80,14 @@ func TestReconfigureGrowthHot(t *testing.T) {
 	p := off
 	p.GrowthHours = []int{13}
 	s.Reconfigure(p)
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 11, 30, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 11, 13, 0, 0, 0, time.Local); !at.Equal(want) || !hasKind(kinds, taskGrowth) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 11, 30, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 11, 13, 0, 0, 0, cst.Loc); !at.Equal(want) || !hasKind(kinds, taskGrowth) {
 		t.Errorf("next=%v kinds=%v want 13:00 [growth]（时点热改）", at, kinds)
 	}
 
 	p.GrowthDisabled = true
 	s.Reconfigure(p)
-	at, kinds = s.nextWake(time.Date(2026, 9, 11, 11, 30, 0, 0, time.Local))
+	at, kinds = s.nextWake(time.Date(2026, 9, 11, 11, 30, 0, 0, cst.Loc))
 	if hasKind(kinds, taskGrowth) {
 		t.Errorf("kinds=%v 不应含 growth（开关热改）", kinds)
 	}

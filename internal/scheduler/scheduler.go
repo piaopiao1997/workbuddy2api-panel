@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -293,8 +294,11 @@ func jitterOffset(kind taskKind, nominal time.Time, jitterMinutes int) time.Dura
 func nextFireKind(now time.Time, hours []int, kind taskKind, jitterMinutes int) time.Time {
 	var earliest time.Time
 	for _, hour := range hours {
+		// 时点按上游自然日的钟点解释（CST），不按宿主时区：UTC 容器里配 [10] 若用
+		// now.Location() 会跑在 CST 18:00（见 internal/cst 的包注释）。
+		local := now.In(cst.Loc)
 		for d := 0; d < 2; d++ {
-			nominal := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, now.Location()).AddDate(0, 0, d)
+			nominal := time.Date(local.Year(), local.Month(), local.Day(), hour, 0, 0, 0, cst.Loc).AddDate(0, 0, d)
 			t := nominal.Add(jitterOffset(kind, nominal, jitterMinutes))
 			if !t.After(now) {
 				continue
@@ -487,16 +491,16 @@ func (s *Scheduler) Run(ctx context.Context) {
 	// 启动补跑：进程停机（部署 / 重启 / 崩溃）跨过今天的时点，迟到唤醒补跑救不了
 	// ——它只管进程活着时 timer 被睡眠冻结。这里补一轮：各任务按天幂等，
 	// 窗口类（夜猫子）自带守卫，重复一轮不会打出无意义请求。
-	if missed := s.missedToday(time.Now()); len(missed) > 0 {
+	if missed := s.missedToday(cst.Now()); len(missed) > 0 {
 		log.Printf("启动补跑：%v（今天的时点已过）", missed)
 		if !sleepCtx(ctx, wakeupGraceDelay) {
 			return // 开机瞬间网络/DNS 可能未就绪（同 issue #152 的宽限口径）
 		}
 		s.runBatch(ctx, missed)
-		s.markRan(missed, time.Now())
+		s.markRan(missed, cst.Now())
 	}
 	for {
-		next, kinds := s.nextWake(time.Now())
+		next, kinds := s.nextWake(cst.Now())
 		if next.IsZero() {
 			// 四类任务全部禁用：不空转，等重排通知（在线改配置重新启用）或退出信号。
 			select {

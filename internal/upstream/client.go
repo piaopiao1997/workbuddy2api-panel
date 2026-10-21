@@ -21,8 +21,9 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
 )
 
 // ErrKind 错误分类，pool 据此决定冷却时长。
@@ -217,7 +218,7 @@ var badParamsMarkerCode = `"code":11101`
 
 // softRateResetLoc 上游 429 6004 文案中的重置时间固定按 UTC+8 解释（上游文案如此，
 // 与容器时区无关）。
-var softRateResetLoc = time.FixedZone("UTC+8", 8*60*60)
+var softRateResetLoc = cst.Loc
 
 // SoftRateResetLoc 暴露重置时间的固定时区（供测试构造/断言同一时区口径）。
 func SoftRateResetLoc() *time.Location { return softRateResetLoc }
@@ -1836,7 +1837,7 @@ func promoActive(p *v3ModelPromotion, now time.Time) bool {
 			}
 		}
 		if len(sc.Daily) > 0 {
-			cur := now.Hour()*60 + now.Minute()
+			cur := now.In(cst.Loc).Hour()*60 + now.Minute()
 			inWindow := false
 			for _, w := range sc.Daily {
 				st, ok1 := promoClock(w.Start)

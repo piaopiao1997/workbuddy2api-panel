@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -111,7 +113,7 @@ func TestEnterpriseGateSkipsGrowthTasks(t *testing.T) {
 	// 判别力取决于运行环境的墙钟（本机白天跑 = 什么都没测）。钉住后五个用例
 	// 在任何环境、任何时刻都真正执行。
 	restoreClock := nowForNightWindow
-	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 7, 23, 30, 0, 0, time.Local) }
+	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 7, 23, 30, 0, 0, cst.Loc) }
 	t.Cleanup(func() { nowForNightWindow = restoreClock })
 
 	cases := []struct {
@@ -204,7 +206,7 @@ func sessionTestScheduler(t *testing.T, switched bool) (*Scheduler, *recorderUps
 // 调用，与个人号对照完全一致——这是「别再把该章当企业上下文」的回归钉子。
 func TestStampedTokenNotGated(t *testing.T) {
 	restoreClock := nowForNightWindow
-	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 12, 23, 30, 0, 0, time.Local) }
+	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 12, 23, 30, 0, 0, cst.Loc) }
 	t.Cleanup(func() { nowForNightWindow = restoreClock })
 
 	cases := []struct {

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -48,18 +50,18 @@ func TestMissedToday(t *testing.T) {
 		cfg  Config
 		want []taskKind
 	}{
-		{"今天的时点已过 → 补", time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local),
+		{"今天的时点已过 → 补", time.Date(2026, 10, 15, 10, 0, 0, 0, cst.Loc),
 			Config{CheckinHours: []int{9}}, []taskKind{taskCheckin}},
-		{"今天还有更晚的时点 → 不补（当天照常会跑，补跑是多余的）", time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local),
+		{"今天还有更晚的时点 → 不补（当天照常会跑，补跑是多余的）", time.Date(2026, 10, 15, 10, 0, 0, 0, cst.Loc),
 			Config{CheckinHours: []int{9, 21}}, nil},
-		{"时点还没到 → 不补", time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local),
+		{"时点还没到 → 不补", time.Date(2026, 10, 15, 10, 0, 0, 0, cst.Loc),
 			Config{CheckinHours: []int{11}}, nil},
-		{"禁用任务不进候选", time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local),
+		{"禁用任务不进候选", time.Date(2026, 10, 15, 10, 0, 0, 0, cst.Loc),
 			Config{CheckinHours: []int{9}, CheckinDisabled: true, TravelHours: []int{8}}, []taskKind{taskTravel}},
-		{"多类一起补", time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local),
+		{"多类一起补", time.Date(2026, 10, 15, 10, 0, 0, 0, cst.Loc),
 			Config{CheckinHours: []int{9}, TravelHours: []int{8}, KeepaliveHours: []int{7}, GrowthHours: []int{11}},
 			[]taskKind{taskCheckin, taskTravel, taskKeepalive}},
-		{"跨年：12/31 的时点已过 → 补", time.Date(2026, 12, 31, 10, 0, 0, 0, time.Local),
+		{"跨年：12/31 的时点已过 → 补", time.Date(2026, 12, 31, 10, 0, 0, 0, cst.Loc),
 			Config{CheckinHours: []int{1}}, []taskKind{taskCheckin}},
 	}
 	for _, c := range cases {
@@ -80,7 +82,7 @@ func TestMissedToday(t *testing.T) {
 // nextWake 与 missedToday 必须共用同一套「有哪些任务族」口径：新增任务族漏改一处，
 // 排程或补跑会静默少一类（正是「同一件事两套纪律」那类缺口）。
 func TestEnabledSlotsSingleSourceOfTruth(t *testing.T) {
-	now := time.Date(2026, 10, 15, 10, 0, 0, 0, time.Local)
+	now := time.Date(2026, 10, 15, 10, 0, 0, 0, cst.Loc)
 	all := Config{
 		CheckinHours: []int{9}, TravelHours: []int{8}, ActivityHours: []int{7},
 		KeepaliveHours: []int{6}, BlackcatHours: []int{5}, GrowthHours: []int{4},
@@ -133,7 +135,7 @@ func TestRunCatchesUpMissedSlots(t *testing.T) {
 }
 
 func TestNextFire(t *testing.T) {
-	loc := time.Local
+	loc := cst.Loc
 	now := time.Date(2026, 7, 27, 10, 0, 0, 0, loc)
 	next := nextFire(now, []int{9, 21})
 	if next.Hour() != 21 || next.Day() != 27 {
@@ -152,7 +154,7 @@ func TestNextFire(t *testing.T) {
 }
 
 func TestNextFireMergesSchedules(t *testing.T) {
-	now := time.Date(2026, 7, 27, 20, 0, 0, 0, time.Local)
+	now := time.Date(2026, 7, 27, 20, 0, 0, 0, cst.Loc)
 	next := nextFire(now, []int{9, 21, 22})
 	if next.Hour() != 21 {
 		t.Errorf("next=%v want 21 (earliest of 21/22)", next)
@@ -163,8 +165,8 @@ func TestNextFireMergesSchedules(t *testing.T) {
 func TestNextWakeKeepaliveOnly(t *testing.T) {
 	s := New(Config{CheckinHours: []int{9}, KeepaliveHours: []int{22},
 		TravelDisabled: true, ActivityDisabled: true})
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskKeepalive {
@@ -183,8 +185,8 @@ func TestNextWakeSameInstantFiresAll(t *testing.T) {
 		ActivityDisabled: true,
 		BlackcatDisabled: true,
 	})
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 21, 30, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 21, 30, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v", at, want)
 	}
 	if !hasKind(kinds, taskCheckin) || !hasKind(kinds, taskKeepalive) {
@@ -192,8 +194,8 @@ func TestNextWakeSameInstantFiresAll(t *testing.T) {
 	}
 
 	// 22 点过后下一次是次日 09:00，且只含签到（旅行/活跃已禁用）。
-	at, kinds = s.nextWake(time.Date(2026, 9, 11, 22, 30, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 12, 9, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds = s.nextWake(time.Date(2026, 9, 11, 22, 30, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 12, 9, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskCheckin {
@@ -214,8 +216,8 @@ func TestNextWakeNothingScheduled(t *testing.T) {
 func TestNextWakeCheckinDisabled(t *testing.T) {
 	s := New(Config{CheckinDisabled: true, CheckinHours: []int{9, 21}, KeepaliveHours: []int{22},
 		TravelDisabled: true, ActivityDisabled: true})
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v（不应再有 21 点签到）", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskKeepalive {
@@ -227,8 +229,8 @@ func TestNextWakeCheckinDisabled(t *testing.T) {
 func TestNextWakeKeepaliveDisabled(t *testing.T) {
 	s := New(Config{KeepaliveDisabled: true, CheckinHours: []int{9, 21}, KeepaliveHours: []int{22},
 		TravelDisabled: true, ActivityDisabled: true})
-	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, time.Local))
-	if want := time.Date(2026, 9, 11, 21, 0, 0, 0, time.Local); !at.Equal(want) {
+	at, kinds := s.nextWake(time.Date(2026, 9, 11, 20, 0, 0, 0, cst.Loc))
+	if want := time.Date(2026, 9, 11, 21, 0, 0, 0, cst.Loc); !at.Equal(want) {
 		t.Errorf("next=%v want %v（不应再有 22 点保活）", at, want)
 	}
 	if len(kinds) != 1 || kinds[0] != taskCheckin {
