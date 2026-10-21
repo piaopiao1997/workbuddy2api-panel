@@ -55,7 +55,10 @@
     "client_name": "",
     "device_token": "",
     "device_token_file": "",
-    "passthrough_ip": false
+    "passthrough_ip": false,
+    "allow_direct_fallback": false,
+    "proxy_probe_seconds": 60,
+    "proxy_probe_url": "https://copilot.tencent.com/"
   },
   "features": {
     "sanitize_blacklist_fingerprints": true

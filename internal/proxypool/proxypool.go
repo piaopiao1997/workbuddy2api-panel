@@ -7,9 +7,9 @@
 // 三种策略（config: upstream.proxy_mode）：
 //   - off         : 直连，行为与历史版本完全一致（默认值，升级零行为变化）
 //   - per_account : 单号单代理。同一个账号恒定走同一个出口——最贴近真人，
-//                   账号 IP 不会跳变，是本功能的主推模式
+//     账号 IP 不会跳变，是本功能的主推模式
 //   - round_robin : 每请求轮换。仅用于「出口都很干净、只求摊薄」的场景；
-//                   账号 IP 跳变本身可能是风控信号，非必要不用
+//     账号 IP 跳变本身可能是风控信号，非必要不用
 //
 // 健康度：每个出口记录成功/失败计数，连续失败达阈值即标记 dead 并跳过；
 // dead 可由面板手动重置。代理失效是常态（免费代理尤甚），自动跳过比让请求
@@ -44,6 +44,13 @@ const deadThreshold = 3
 // ErrNoProxy 池中没有可用出口（全部 dead 或未配置）。调用方应回落直连。
 var ErrNoProxy = errors.New("proxypool: no available proxy")
 
+// ErrAllDead 池非空但全部出口都处于 dead 状态。
+//
+// 与 ErrNoProxy 的区别是语义：ErrNoProxy 是「本来就没配代理」（直连是配置意图），
+// ErrAllDead 是「配了但全挂了」（直连是事故）。Transport 只对后者做失败处理，
+// 除非 upstream.allow_direct_fallback 显式放行。
+var ErrAllDead = errors.New("proxypool: all proxies dead")
+
 // entry 单个出口。
 type entry struct {
 	raw  string // 原始配置串（含账密，仅内部使用，绝不回显明文密码）
@@ -72,6 +79,9 @@ type Pool struct {
 	mode    Mode
 	cursor  atomic.Uint64
 	assign  map[string]*entry // uid -> entry（per_account 模式）
+	// directFallback 池全 dead 时是否允许回落直连（upstream.allow_direct_fallback）。
+	// 默认 false：宁可请求失败，也不让整批账号从宿主机真实 IP 涌出。
+	directFallback atomic.Bool
 }
 
 // New 构造空池（off 模式）。
@@ -176,37 +186,49 @@ func (p *Pool) Len() int {
 }
 
 // Pick 为 uid 选一个出口。返回 (nil, "") 表示「应直连」——
-// off 模式、池空、或全部 dead。
+// off 模式、池空、或全部 dead（后者不区分，仅为兼容既有调用方；
+// 需要区分的场景用 PickStrict）。
 func (p *Pool) Pick(uid string) (*url.URL, string) {
+	u, raw, err := p.PickStrict(uid)
+	if err != nil {
+		return nil, ""
+	}
+	return u, raw
+}
+
+// PickStrict 与 Pick 同语义，但把「池非空却全部 dead」作为 ErrAllDead 返回。
+//
+// 为什么需要区分：off/池空时直连是配置意图，全 dead 时直连是事故 —— 后者会把
+// 整批账号从宿主机真实 IP 放出去（见 upstream.allow_direct_fallback）。
+func (p *Pool) PickStrict(uid string) (*url.URL, string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if p.mode == ModeOff || len(p.entries) == 0 {
-		return nil, ""
+		return nil, "", nil
 	}
+	e := p.pickLocked(uid)
+	if e == nil {
+		return nil, "", ErrAllDead
+	}
+	return e.url, e.raw, nil
+}
 
+// pickLocked 按 mode 选一个出口；全 dead 返回 nil。调用方须持写锁。
+func (p *Pool) pickLocked(uid string) *entry {
 	if p.mode == ModePerAccount {
 		if uid != "" {
 			if e, ok := p.assign[uid]; ok && !e.dead.Load() {
-				return e.url, e.raw
+				return e
 			}
 		}
 		e := p.pickLeastAssignedHealthyLocked()
-		if e == nil {
-			return nil, ""
-		}
-		if uid != "" {
+		if e != nil && uid != "" {
 			p.assign[uid] = e
 		}
-		return e.url, e.raw
+		return e
 	}
-
-	// ModeRoundRobin
-	e := p.pickHealthyLocked()
-	if e == nil {
-		return nil, ""
-	}
-	return e.url, e.raw
+	return p.pickHealthyLocked()
 }
 
 // pickLeastAssignedHealthyLocked 从健康出口中挑选当前绑定账号数最少的（负载均衡）。

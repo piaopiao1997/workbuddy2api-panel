@@ -55,6 +55,26 @@ func stateSibling(stateFile, name string) string {
 	return filepath.Join(dir, name)
 }
 
+// proxyProbeStop 复通探测的停止函数：配置热更新时先停旧的再起新的，
+// 否则每次保存设置都会多一个 goroutine 在跑。
+var proxyProbeStop func()
+
+// restartProxyProbe 按配置（重）启熔断出口的复通探测。
+//
+// 探测周期 = upstream.proxy_probe_seconds（0 关闭）；目标 = upstream.proxy_probe_url。
+// 只探 dead 出口，池子健康时不产生任何流量。
+func restartProxyProbe(cfg *Config) {
+	if proxyProbeStop != nil {
+		proxyProbeStop()
+		proxyProbeStop = nil
+	}
+	proxypool.Default().SetDirectFallback(cfg.Upstream.AllowDirectFallback)
+	proxyProbeStop = proxypool.Default().StartProbe(proxypool.ProbeConfig{
+		Interval: time.Duration(cfg.Upstream.ProxyProbeSeconds) * time.Second,
+		URL:      cfg.Upstream.ProxyProbeURL,
+	})
+}
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
 	// 实际生效的配置路径：下面退回「默认+env」时清空，免得启动横幅报了份没读到的文件（issue #155）。
@@ -174,6 +194,8 @@ func main() {
 	up.PassthroughIP = cfg.Upstream.PassthroughIP
 	// 启动期初始化出站代理池（未配 proxies 时退化为 off 直连）
 	proxypool.Default().Configure(cfg.Upstream.Proxies, cfg.Upstream.ProxyMode)
+	// 熔断出口的复通探测 + 全 dead 时的直连开关（默认不放行）
+	restartProxyProbe(cfg)
 	// global realm 路由（config global 段）：上游侧开关（第一道闸）+ base 覆盖；
 	// auth 侧开关（auth.SetGlobalEnabled）是第二道闸，两者同 config global.enabled。
 	up.GlobalEnabled = cfg.Global.Enabled
@@ -653,6 +675,7 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	up.SanitizeFingerprints.Store(newCfg.Features.SanitizeBlacklistFingerprints)
 	// 代理池热生效：更新出口列表与分配策略，无需重启容器
 	proxypool.Default().Configure(newCfg.Upstream.Proxies, newCfg.Upstream.ProxyMode)
+	restartProxyProbe(newCfg)
 	p.SetBreaker(newCfg.Pool.BreakerThreshold, newCfg.BreakerCooldownDur, newCfg.BreakerCooldownMaxD)
 	p.SetMaxInFlight(newCfg.Pool.MaxInFlight)
 	p.SetMaxInFlightGlobal(newCfg.Pool.MaxInFlightGlobal)

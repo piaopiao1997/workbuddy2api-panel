@@ -85,12 +85,23 @@ func newTransport() *http.Transport {
 		// 摊到不同出口；而同一个账号必须恒定走同一出口（IP 跳变本身是风控信号），
 		// 所以选路逻辑在 proxypool 里按 mode 决定，这里只做转接。
 		//
-		// 返回 (nil, nil) 的三种情形都等价于「直连」，与历史行为完全一致：
-		//   - proxy_mode = off（默认值）
-		//   - 池为空
-		//   - 全部出口都已 dead
+		// 三种情形必须区分开（issue #39 的结论）：
+		//   - proxy_mode = off / 池为空 → 直连，这是**配置意图**，返回 (nil, nil)
+		//   - 池非空但全部 dead        → **事故**，返回 error 让请求失败
+		// 为什么后者不能回落直连：全池同时挂掉时回落，等于把整批账号从宿主机
+		// 真实 IP 集中放出去，上游看到的不是「某账号换了出口」，而是「一批账号
+		// 突然从同一个陌生 IP 涌入」，风控命中率最高。宁可短暂不可用，也不静默
+		// 暴露真实 IP（不可逆）。
+		//
+		// 需要放行时开 upstream.allow_direct_fallback（默认 false）。
 		Proxy: func(req *http.Request) (*url.URL, error) {
-			u, _ := proxypool.Default().Pick(proxypool.UIDFrom(req.Context()))
+			u, _, err := proxypool.Default().PickStrict(proxypool.UIDFrom(req.Context()))
+			if err != nil {
+				if proxypool.Default().DirectFallback() {
+					return nil, nil
+				}
+				return nil, err
+			}
 			return u, nil
 		},
 		DialContext: dialer.DialContext,

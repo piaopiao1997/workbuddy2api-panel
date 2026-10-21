@@ -171,6 +171,15 @@ type Config struct {
 		Proxies []string `json:"proxies"`
 		// ProxyMode 代理模式：off（默认直连）/ per_account（单号单代理，推荐）/ round_robin（轮询）。
 		ProxyMode string `json:"proxy_mode"`
+		// AllowDirectFallback 池非空但全部 dead 时，是否允许回落直连（默认 false）。
+		// false：请求失败并带上出口原因；true：静默直连（会暴露宿主机真实 IP，
+		// 上游看到一批账号从同一陌生 IP 涌入 —— 风控命中率最高，慎开）。
+		AllowDirectFallback bool `json:"allow_direct_fallback"`
+		// ProxyProbeSeconds 熔断出口的复通探测周期（秒）。默认 60；0 = 关闭探测
+		// （关闭后 dead 出口只能靠面板「重置健康度」手动复活）。
+		ProxyProbeSeconds int `json:"proxy_probe_seconds"`
+		// ProxyProbeURL 复通探测目标；空 = https://copilot.tencent.com/
+		ProxyProbeURL string `json:"proxy_probe_url"`
 	} `json:"upstream"`
 
 	Features struct {
@@ -320,6 +329,8 @@ func Default() *Config {
 	c.Schedule.TravelHours = []int{9, 21}
 	c.Schedule.ActivityHours = []int{10}
 	c.Schedule.KeepaliveHours = []int{22}
+	// 复通探测默认开（60s）。键缺席时保留此值；显式写 0 才是关闭。
+	c.Upstream.ProxyProbeSeconds = 60
 	c.Schedule.BlackcatHours = []int{23}
 	c.Schedule.GrowthHours = []int{11}
 	// 开关「缺省 true」靠这几行实现：Load 先取 Default() 再 json.Unmarshal 覆盖，
@@ -608,6 +619,9 @@ func (c *Config) EnvironmentManagedFields() []string {
 		{"WB2A_DEVICE_TOKEN_FILE", "upstream.device_token_file", ""}, {"WB2A_PASSTHROUGH_IP", "upstream.passthrough_ip", "bool"},
 		{"WB2A_PROXY_MODE", "upstream.proxy_mode", ""},
 		{"WB2A_PROXIES", "upstream.proxies", ""},
+		{"WB2A_ALLOW_DIRECT_FALLBACK", "upstream.allow_direct_fallback", "bool"},
+		{"WB2A_PROXY_PROBE_SECONDS", "upstream.proxy_probe_seconds", "int"},
+		{"WB2A_PROXY_PROBE_URL", "upstream.proxy_probe_url", ""},
 		{"WB2A_SANITIZE_FINGERPRINTS", "features.sanitize_blacklist_fingerprints", "bool"},
 		{"WB2A_PROMPT_MODE", "prompt.mode", ""}, {"WB2A_PROMPT_FILE", "prompt.file", ""},
 		{"WB2A_EXPIRING_SOON", "pool.expiring_soon", ""}, {"WB2A_PREFER_EXPIRING", "pool.prefer_expiring", "bool"},
@@ -783,6 +797,13 @@ func (c *Config) normalize() error {
 		}
 	} else {
 		c.Upstream.ProxyMode = m
+	}
+	// 探测周期：负数按 0（关闭）处理；URL 空走 proxypool 内置默认。
+	if c.Upstream.ProxyProbeSeconds < 0 {
+		c.Upstream.ProxyProbeSeconds = 0
+	}
+	if c.Upstream.ProxyProbeURL == "" {
+		c.Upstream.ProxyProbeURL = "https://copilot.tencent.com/"
 	}
 	if c.Upstream.IdleTimeoutSeconds <= 0 {
 		c.Upstream.IdleTimeoutSeconds = 300
