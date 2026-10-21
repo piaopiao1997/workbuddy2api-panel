@@ -26,16 +26,16 @@ func globalAuth() *auth.Auth {
 // 2026-10-20 抓包：`WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0`。
 const v3ProbeUACNForTest = "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"
 
-// TestUARealmBrand 两版品牌段形态**不同**，版本按 realm 分开。
+// TestUARealmBrand 首段恒驼峰 WorkBuddy，只有第二段品牌随 realm 变。
 //
-// 2026-10-20 双版本真机抓包（同一台机器、同一套代理）：
+// 2026-10-21 国际版 5.8.4 GUI 真机抓包（/v2/chat/completions 主对话 + 标题生成）：
 //
-//	CN 5.8.3    → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0     （驼峰原样，28 路径）
-//	global 5.8.4 → workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0 （小写连字符，22 路径）
+//	CN 5.8.3     → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0     （28 路径）
+//	global 5.8.4 → WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0  （chat 链路实测）
 //
-// 关键：CN 的 brand 段是**驼峰**，不是 slug。曾把 CN 也写成 `workbuddy`（把 GL 的
-// 规则统一套过去），那是错的——CN 每个业务请求都是驼峰，写成 slug 反而成了最明显
-// 的非官方指纹。两版规则不同是因为 applicationName 在打包期被改写方式不同。
+// 关键：首段永远是驼峰 `WorkBuddy`——官方 chat 走 OpenAI SDK 的 buildUserAgent，
+// 首段取 productName 原样，第二段才是打包期改写的 slug。曾把 global 首段也写成
+// `workbuddy-ai/`（与 /v2/report 那类非 SDK 请求混淆），与 chat 真机不符。
 func TestUARealmBrand(t *testing.T) {
 	c := New()
 
@@ -43,13 +43,13 @@ func TestUARealmBrand(t *testing.T) {
 	if got, want := c.userAgent(cn), "WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0"; got != want {
 		t.Errorf("CN UA=%q want %q", got, want)
 	}
-	if got, want := c.userAgent(globalAuth()), "workbuddy-ai/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"; got != want {
+	if got, want := c.userAgent(globalAuth()), "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"; got != want {
 		t.Errorf("global UA=%q want %q", got, want)
 	}
 	// 显式配置仍然赢（用户自定义品牌/版本）。
 	c.ClientVersion = "9.9.9"
 	c.CliVersion = "1.2.3"
-	if got, want := c.userAgent(globalAuth()), "workbuddy-ai/9.9.9 workbuddy-ai/9.9.9 CLI/1.2.3"; got != want {
+	if got, want := c.userAgent(globalAuth()), "WorkBuddy/9.9.9 workbuddy-ai/9.9.9 CLI/1.2.3"; got != want {
 		t.Errorf("override UA=%q want %q", got, want)
 	}
 }

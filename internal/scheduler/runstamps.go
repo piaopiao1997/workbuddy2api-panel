@@ -15,6 +15,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
@@ -25,7 +26,7 @@ func (s *Scheduler) ranToday(kind taskKind, now time.Time) bool {
 	}
 	s.stampMu.Lock()
 	defer s.stampMu.Unlock()
-	return s.loadStamps()[kind.String()] == now.Format("2006-01-02")
+	return s.loadStamps()[kind.String()] == cst.Day(now)
 }
 
 // markRan 把 kinds 记成「今天已补跑」。落盘失败只记日志：下次重启多补一轮，
@@ -36,7 +37,7 @@ func (s *Scheduler) markRan(kinds []taskKind, now time.Time) {
 	}
 	s.stampMu.Lock()
 	defer s.stampMu.Unlock()
-	day := now.Format("2006-01-02")
+	day := cst.Day(now)
 	st := s.loadStamps()
 	for k, v := range st {
 		if v != day {

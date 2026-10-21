@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
@@ -29,6 +30,9 @@ import (
 // 断言表格行输出的测试（logging_test.go 中的 ChatLogs/LogChatRow 系列）用 withChatLog 临时开启。
 func TestMain(m *testing.M) {
 	chatLogEnabled = false
+	// 模型繁忙的等待路径默认关闭：否则命中它的测试要真睡满 10s（判据由
+	// busywait_test.go 单独钉住）。
+	busyWaitCap = 0
 	os.Exit(m.Run())
 }
 
@@ -883,8 +887,8 @@ func TestChatHardCreditCooldownUntilNextDay4AM(t *testing.T) {
 		t.Errorf("reason=%q", st.Reason)
 	}
 	// 硬信贷冷却必须是次日 04:00，而不是固定 12h/配置时长。
-	if st.Until.Hour() != 4 {
-		t.Errorf("until hour=%d want 4 (next-day 04:00)", st.Until.Hour())
+	if st.Until.In(cst.Loc).Hour() != 4 {
+		t.Errorf("until hour(CST)=%d want 4 (next-day 04:00)", st.Until.Hour())
 	}
 	// 距次日 04:00 最长 28h（凌晨 00:00~04:00 间运行时 now→次日 04:00 跨度 > 24h，属正常）。
 	if d := time.Until(st.Until); d <= 0 || d > 28*time.Hour {
@@ -920,7 +924,7 @@ func TestChat429Code14018UsesHardCreditCooldown(t *testing.T) {
 	if !ok || !st.Cooling {
 		t.Fatalf("14018 account should be cooling: %+v ok=%v", st, ok)
 	}
-	if st.Reason != "余额不足" || st.Until.Hour() != 4 {
+	if st.Reason != "余额不足" || st.Until.In(cst.Loc).Hour() != 4 {
 		t.Fatalf("14018 should use hard-credit cooldown, got reason=%q until=%v", st.Reason, st.Until)
 	}
 	if got := p.Pick(); got == nil || got.UID != "good" {
@@ -1217,6 +1221,65 @@ func TestChatModelForbiddenByAccountTypeReturns400(t *testing.T) {
 	}
 	if st := p.ModelBlockedForRealm("gpt-5.6-sol", "global"); !st.Blocked || st.Count != 1 {
 		t.Fatalf("global 账号应写入模型级避让: %+v", st)
+	}
+}
+
+// TestChatModelBusyEverywhereReturns503Retryable 复现「高峰期 DeepSeek 用不了」：
+// 全池该模型只是 14003 忙（model-level cooldown），网关必须给可重试语义
+// （503 + Retry-After + code=model_busy），而不是 400 model_unavailable——
+// 后者会被客户端读成「模型被杀、重试无意义」，而官方客户端此时还在排队等结果。
+func TestChatModelBusyEverywhereReturns503Retryable(t *testing.T) {
+	var calls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 200, sseOK, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "g1", Domain: "www.workbuddy.ai", AccessToken: "at-global", ExpiresAt: 9999999999})
+	// 号还活着，只是这个模型在忙：写 (账号, 模型) 短窗口冷却，与 14003 落库路径一致。
+	p.CooldownModelBusy("g1", "deepseek-v4.1-flash", "14003 model busy")
+
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"global:deepseek-v4.1-flash","messages":[]}`)))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d want 503 body=%s", rec.Code, rec.Body)
+	}
+	if calls != 0 {
+		t.Fatalf("calls=%d want 0（该模型在冷却，不该打上游）", calls)
+	}
+	if got := rec.Header().Get("Retry-After"); got == "" {
+		t.Errorf("缺 Retry-After 头：客户端无从知道等多久")
+	}
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad response JSON: %v body=%s", err, rec.Body)
+	}
+	if resp.Error.Code != "model_busy" {
+		t.Errorf("error.code=%q want model_busy（可重试 ≠ 模型不可用）", resp.Error.Code)
+	}
+}
+
+// TestModelBlockIsTransient 钉住「瞬时 vs 确定性」判据：14003/6004 可重试，
+// 11102/11158 只有换模型有效。
+func TestModelBlockIsTransient(t *testing.T) {
+	cases := map[string]bool{
+		"14003 model busy": true,
+		"6004 model rate limit, reset at 2026-10-21 10:00":  true,
+		"11102 model [glm-9] not found":                     false,
+		"11158 model [gpt-5.6-sol] is not allowed for user": false,
+		"": false,
+	}
+	for reason, want := range cases {
+		if got := modelBlockIsTransient(reason); got != want {
+			t.Errorf("modelBlockIsTransient(%q)=%v want %v", reason, got, want)
+		}
 	}
 }
 

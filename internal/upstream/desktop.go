@@ -507,7 +507,10 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	h.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "text/event-stream")
-	h.Set("User-Agent", desktopUAFor(a))
+	// chat 链路用 SDK 形态 UA（首段恒驼峰 WorkBuddy，见 defaultWorkBuddyUAFor）：
+	// 不能复用 desktopUAFor——那是 /v2/report 等非 SDK 请求的双品牌段形态，
+	// 2026-10-21 国际版真机 chat 抓包实测与此不同。
+	h.Set("User-Agent", c.userAgent(a))
 	// X-Domain 是主机名不是 URL（真机实测 www.workbuddy.ai）。原先塞的是带 scheme
 	// 的 chatBase，与 /v2/report 同一处笔误，一并改正。
 	h.Set("X-Domain", c.desktopHost(a))

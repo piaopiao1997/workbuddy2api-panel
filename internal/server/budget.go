@@ -5,12 +5,12 @@ package server
 import (
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
-// cstZone 与 scheduler 的 CST 日界同一口径。server 不 import scheduler。
-var cstZone = time.FixedZone("CST", 8*60*60)
-
-func cstDay(t time.Time) string { return t.In(cstZone).Format("2006-01-02") }
+// cstDay 上游自然日（CST）日键，口径统一在 internal/cst。
+func cstDay(t time.Time) string { return cst.Day(t) }
 
 type dailyBudget struct {
 	mu       sync.Mutex

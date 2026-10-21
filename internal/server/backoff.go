@@ -6,7 +6,11 @@ package server
 import (
 	"context"
 	"math/rand/v2"
+	"strings"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 // rotateBackoffBase 轮转退避基数（对齐官方 intl CLI computeRequestRetryDelayMs
@@ -55,6 +59,43 @@ func backoffAfter(n int) time.Duration {
 		d = rotateBackoffCap
 	}
 	return jitterDur(d)
+}
+
+// busyWaitCap 「模型繁忙」（14003）全池被挡时，单个请求愿意等待的上限。
+// 超过它的冷却说明上游连续繁忙，等待只会让客户端干耗，直接 503 + Retry-After。
+// 测试置 0 关闭该路径（与 rotateBackoffBase 同口径）。
+var busyWaitCap = 10 * time.Second
+
+// busyWaitFor 报告本请求该为「模型繁忙」等多久再试（0 = 不等，直接按 503 报）。
+// 只有纯 14003 阻塞、且剩余冷却在上限内才值得等：11102/11158 换号重试必然同样
+// 失败，冷却已被连续命中拉长到上限外说明上游真的持续繁忙，等待只是让客户端干耗。
+func busyWaitFor(blk pool.ModelBlockStatus, now time.Time, cap time.Duration) time.Duration {
+	if !blk.Blocked || blk.Until.IsZero() || !isModelBusyReason(blk.Reason) {
+		return 0
+	}
+	d := blk.Until.Sub(now)
+	if d <= 0 || d > cap {
+		return 0
+	}
+	return d
+}
+
+// isModelBusyReason 判「模型繁忙」：冷却原因可能是上游原文（含 `"code":14003`），
+// 也可能是 applyErrorPolicy 写入的固定标记 "14003 model busy"——两者都要认。
+func isModelBusyReason(reason string) bool {
+	return upstream.IsModelBusy(reason) || strings.Contains(reason, "14003")
+}
+
+// waitPast 等待到解封时刻：只在 d 之上加**正向**抖动（0 ~ +25%），绝不提前醒来。
+//
+// 不能用 jitterDur：那是双向 ±25%，抽到小于 1 的系数时会在冷却还没解除时就醒，
+// 于是「只等一次」的额度被白花掉、客户端多等 8 秒后照样拿 503（实测同一场景
+// 8 次里 4 次白等，issue #46）。往上多等一点没有代价，早醒一次就是纯损失。
+func waitPast(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return d + time.Duration(float64(d)*rand.Float64()*jitterFraction)
 }
 
 // sleepCtx 可取消的等待：ctx 取消立即返回 false（客户端断连/优雅停机不必等退避

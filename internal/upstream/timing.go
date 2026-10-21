@@ -16,6 +16,10 @@ import "time"
 type ChatTiming struct {
 	Prep time.Duration // 本地请求体准备
 	Do   time.Duration // 上游 Do（含建连/首字节；路径 fallback 累加）
+	// RequestedEffort 客户端原始请求的思考档位（reasoning_effort / reasoningEffort
+	// 原值，snake 优先）；未携带 → 空。不含网关补的默认档（injectThinking 之后
+	// 两者就分不开了，故在注入前抓取）。
+	RequestedEffort string
 	// Effort 本次实际生效的思考档位（客户端携带过 reasoning_effort 才有值；未携带/未知
 	// 模型/未知档位 → 空）。改写可能把它换成模型支持的最近档，行里显示的就是生效值。
 	Effort string

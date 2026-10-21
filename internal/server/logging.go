@@ -77,8 +77,12 @@ type chatStat struct {
 	// 零值 = 未测量（非流式/未走到上游）。
 	prep, do time.Duration
 
-	// effort 本次实际生效的思考档位（客户端携带过 reasoning_effort 才有值）。
-	effort string
+	// effort 本次实际生效的思考档位（降级后出站值）。
+	// effortReq 客户端原始请求档位（injectThinking 补默认档之前抓的）。
+	// 两者分开的原因见 issue #43：只报生效值时，「客户端设了 max、日志显示 high」
+	// 无法判断是客户端根本没发出去，还是被网关按模型档位表降级了。
+	effort    string
+	effortReq string
 
 	logged bool
 }
@@ -106,7 +110,7 @@ func (s *chatStat) done() {
 	logChatRowFull(s.ttfb, total, s.model, s.mode, s.uid, s.nick, s.status, s.toks,
 		s.think, s.cacheHit, s.cacheMiss, s.hasCache,
 		s.requestID, s.outcome, s.attempts, s.credit, s.hasCredit,
-		s.clientIP, s.userAgent, s.prep, s.do, s.effort)
+		s.clientIP, s.userAgent, s.prep, s.do, s.effort, s.effortReq)
 	s.budget.add(s.credit, s.hasCredit)
 	noteProm(s, total)
 }
@@ -139,7 +143,11 @@ type chatStatsReader struct {
 	thinkTokens int
 	hasThink    bool
 	errorFrame  bool
-	pend        []byte // 已读未返回的行缓存
+	// issue #44 观测：本流是否出现过非空 delta.tool_calls、最后一个非空 finish_reason。
+	// 两者组合用于识别「声明了 tools 却拿到 stop + 零 tool_calls」的静默回合。
+	sawToolCalls bool
+	finishReason string
+	pend         []byte // 已读未返回的行缓存
 }
 
 // newChatStatsReaderSince 以 since 为 TTFB 计时起点（通常是请求进入 handler 的时刻）。
@@ -156,6 +164,12 @@ func (s *chatStatsReader) Thinking() (int, bool) { return s.thinkTokens, s.hasTh
 
 // Tokens 返回末帧 usage.completion_tokens 与是否缺失；无 usage 时 ok=false。
 func (s *chatStatsReader) Tokens() (int, bool) { return s.completionTokens, s.hasCompletionTokens }
+
+// SawToolCalls 报告本流是否出现过非空 delta.tool_calls（issue #44 观测）。
+func (s *chatStatsReader) SawToolCalls() bool { return s.sawToolCalls }
+
+// FinishReason 本流最后一个非空 finish_reason；上游没给过则为空串。
+func (s *chatStatsReader) FinishReason() string { return s.finishReason }
 
 // Credit 返回末帧 usage.credit（本次真实扣费积分）与是否缺失。
 func (s *chatStatsReader) Credit() (float64, bool) { return s.credit, s.hasCredit }
@@ -215,6 +229,14 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 	var chunk struct {
 		Error json.RawMessage `json:"error"`
+		// issue #44：只取 delta.tool_calls 与 finish_reason 两个字段。encoding/json
+		// 会跳过未声明的键（含 content），不为正文分配内存。
+		Choices []struct {
+			Delta struct {
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
 		Usage *struct {
 			PromptTokens     *int `json:"prompt_tokens"`
 			CompletionTokens *int `json:"completion_tokens"`
@@ -230,14 +252,23 @@ func (s *chatStatsReader) parseSSELine(line string) {
 			PromptCacheMissTokens *int            `json:"prompt_cache_miss_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
-		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
-			s.errorFrame = true
-		}
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
 		return
 	}
 	if len(chunk.Error) > 0 {
 		s.errorFrame = true
+	}
+	for _, c := range chunk.Choices {
+		// 上游每帧都带 "tool_calls":[]（空数组），所以判据是长度而不是字段存在。
+		if len(c.Delta.ToolCalls) > 0 {
+			s.sawToolCalls = true
+		}
+		if c.FinishReason != "" {
+			s.finishReason = c.FinishReason
+		}
+	}
+	if chunk.Usage == nil {
+		return
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true
@@ -553,7 +584,7 @@ const (
 //
 // logChatRow 旧形态（带缓存命中率、无请求 ID）；新代码请用 logChatRowFull。
 func logChatRow(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int, cacheHit, cacheMiss int, hasCache bool) {
-	logChatRowFull(ttfb, total, model, mode, uid, nick, status, toks, -1, cacheHit, cacheMiss, hasCache, "", "", 0, 0, false, "", "", 0, 0, "")
+	logChatRowFull(ttfb, total, model, mode, uid, nick, status, toks, -1, cacheHit, cacheMiss, hasCache, "", "", 0, 0, false, "", "", 0, 0, "", "")
 }
 
 // logChatRowEx 带请求 ID、结果、重试、积分与调用来源字段的扩展形态；缓存列不传
@@ -562,14 +593,18 @@ func logChatRowEx(ttfb, total time.Duration, model, mode, uid, nick string, stat
 	requestID, outcome string, attempts int, credit float64, hasCredit bool,
 	clientIP, userAgent string) {
 	logChatRowFull(ttfb, total, model, mode, uid, nick, status, toks, -1, 0, 0, false,
-		requestID, outcome, attempts, credit, hasCredit, clientIP, userAgent, 0, 0, "")
+		requestID, outcome, attempts, credit, hasCredit, clientIP, userAgent, 0, 0, "", "")
 }
 
 // logChatRowFull 是本文件唯一的行输出点：宽表字段 + 缓存列 + 可选请求 ID/结果/重试/积分尾段 + 调用来源段。
+//
+// effort 为生效档位、effortReq 为客户端原始档位（见 chatStat 字段注释）：
+// 两者相同只报 effort=；不同报 effort=max->high（客户端要什么、实际发出去什么
+// 一眼可见）；客户端未携带则两个都不报。
 func logChatRowFull(ttfb, total time.Duration, model, mode, uid, nick string, status int, toks int,
 	think int, cacheHit, cacheMiss int, hasCache bool,
 	requestID, outcome string, attempts int, credit float64, hasCredit bool,
-	clientIP, userAgent string, prep, do time.Duration, effort string) {
+	clientIP, userAgent string, prep, do time.Duration, effort, effortReq string) {
 	if !chatLogEnabled {
 		return
 	}
@@ -609,10 +644,16 @@ func logChatRowFull(ttfb, total time.Duration, model, mode, uid, nick string, st
 	if do > 0 || prep > 0 {
 		split = fmt.Sprintf(" prep=%dms do=%dms", prep.Milliseconds(), do.Milliseconds())
 	}
-	// 生效思考档位（见 upstream.normalizeReasoningEffort）：只在客户端携带过该字段时输出，
+	// 思考档位（见 upstream.normalizeReasoningEffort）：只在客户端携带过该字段时输出，
 	// 让"我要 medium 实际发出去的却是 low"这类静默改写当场可见。
+	// 被降级时显示 requested->effective（issue #43：只报生效值会让读者误以为
+	// 客户端根本没发 max，实际是模型档位表里没有这一档）。
 	if effort != "" {
-		split += " effort=" + effort
+		if effortReq != "" && !strings.EqualFold(effortReq, effort) {
+			split += " effort=" + effortReq + "->" + effort
+		} else {
+			split += " effort=" + effort
+		}
 	}
 	extra := ""
 	if requestID != "" {

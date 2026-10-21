@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 // 同一天重启多次只补跑一次：第一次启动补了哪几类，重启后就不该再补哪几类。
 func TestStartupCatchUpRunsOncePerDay(t *testing.T) {
 	stamp := filepath.Join(t.TempDir(), "task-runs.json")
 	cfg := Config{CheckinHours: []int{9}, RunStampFile: stamp}
-	now := time.Date(2026, 10, 20, 15, 0, 0, 0, time.Local) // 签到的 9 点已过
+	now := time.Date(2026, 10, 20, 15, 0, 0, 0, cst.Loc) // 签到的 9 点已过
 
 	first := New(cfg)
 	missed := first.missedToday(now)
@@ -33,7 +35,7 @@ func TestStartupCatchUpRunsOncePerDay(t *testing.T) {
 // 未注入标记文件时不落盘、行为与旧实现一致（每次启动都补）。
 func TestStartupCatchUpWithoutStampFile(t *testing.T) {
 	s := New(Config{CheckinHours: []int{9}})
-	now := time.Date(2026, 10, 20, 15, 0, 0, 0, time.Local)
+	now := time.Date(2026, 10, 20, 15, 0, 0, 0, cst.Loc)
 	s.markRan([]taskKind{taskCheckin}, now) // 空路径 = 不写盘，不能 panic
 	if got := s.missedToday(now); !hasKind(got, taskCheckin) {
 		t.Fatalf("got %v", got)
@@ -46,7 +48,7 @@ func TestStartupCatchUpToleratesCorruptStamp(t *testing.T) {
 	if err := os.WriteFile(stamp, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 10, 20, 15, 0, 0, 0, time.Local)
+	now := time.Date(2026, 10, 20, 15, 0, 0, 0, cst.Loc)
 	if got := New(Config{CheckinHours: []int{9}, RunStampFile: stamp}).missedToday(now); !hasKind(got, taskCheckin) {
 		t.Fatalf("got %v", got)
 	}

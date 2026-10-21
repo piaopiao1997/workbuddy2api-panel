@@ -546,7 +546,7 @@ func TestLogChatRowShowsThinkingTokens(t *testing.T) {
 	out := captureStdout(t, func() {
 		logChatRowFull(1200*time.Millisecond, 8*time.Second, "deepseek-v4.1-flash", "stream",
 			"u123456789", "示例号", http.StatusOK, 1450, 1255, 0, 0, false,
-			"req-x", reqlog.OutcomeSuccess, 1, 0.02, true, "", "", 15*time.Millisecond, 1400*time.Millisecond, "high")
+			"req-x", reqlog.OutcomeSuccess, 1, 0.02, true, "", "", 15*time.Millisecond, 1400*time.Millisecond, "high", "max")
 	})
 	if !strings.Contains(out, "tok=1450 think=1255") {
 		t.Errorf("row should show thinking tokens: %s", out)
@@ -555,9 +555,19 @@ func TestLogChatRowShowsThinkingTokens(t *testing.T) {
 	if !strings.Contains(out, "prep=15ms do=1400ms") {
 		t.Errorf("row should show prep/do split: %s", out)
 	}
-	// 生效思考档位列（issue #175）：客户端要 medium 实际发出去 high 时行里必须能看到。
-	if !strings.Contains(out, "effort=high") {
-		t.Errorf("row should show effective reasoning effort: %s", out)
+	// 生效思考档位列（issue #175/#43）：客户端要 max、实际发出去 high 时，
+	// 行里必须显示降级过程而不是只报生效值——只报生效值会被读成「客户端没发 max」。
+	if !strings.Contains(out, "effort=max->high") {
+		t.Errorf("row should show requested->effective reasoning effort: %s", out)
+	}
+	// 未降级（requested==effective）时不画箭头，保持旧行格式。
+	outSame := captureStdout(t, func() {
+		logChatRowFull(1200*time.Millisecond, 8*time.Second, "deepseek-v4.1-flash", "stream",
+			"u123456789", "示例号", http.StatusOK, 1450, 1255, 0, 0, false,
+			"req-y", reqlog.OutcomeSuccess, 1, 0.02, true, "", "", 15*time.Millisecond, 1400*time.Millisecond, "high", "high")
+	})
+	if !strings.Contains(outSame, "effort=high") || strings.Contains(outSame, "effort=high->") {
+		t.Errorf("same-tier row should show plain effort=high: %s", outSame)
 	}
 	out2 := captureStdout(t, func() {
 		logChatRow(1200*time.Millisecond, 8*time.Second, "deepseek-v4.1-flash", "stream",

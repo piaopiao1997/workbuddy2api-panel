@@ -3,9 +3,11 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -28,10 +30,16 @@ var nowForNightWindow = time.Now
 // RunBlackcatNow 对所有可用账号执行夜猫子对话补足（窗口外跳过）。
 // 由 blackcat_hours 排程（默认 [23]）触发；执行前二次校验 InNightWindow。
 func (s *Scheduler) RunBlackcatNow() {
+	s.runBlackcat(context.Background(), false)
+}
+
+// runBlackcat 夜猫子遍历。spread=true（排程路径）时按账号级偏移错开，见 spread.go。
+func (s *Scheduler) runBlackcat(ctx context.Context, spread bool) {
 	if !upstream.InNightWindow(nowForNightWindow()) {
 		log.Printf("blackcat: 当前不在 23:00–08:00 计数窗口，跳过")
 		return
 	}
+	plan := s.spreadPlan(taskBlackcat, spread, cst.Now())
 	for _, st := range s.cfg.Pool.List() {
 		// 暂停选号（paused）账号跳过：夜猫子是全任务体系里**唯一「整任务都是真实模型
 		// 对话」**的（RunNightChats 逐条 ChatStream 发 glm-5.2 短对话），与「让位防风控」
@@ -49,6 +57,9 @@ func (s *Scheduler) RunBlackcatNow() {
 		}
 		if a.IsEnterprise() {
 			continue // 企业版门控：无成长体系（成长端点上游 403）
+		}
+		if !plan.wait(ctx, st.UID) {
+			return // ctx 取消：剩余账号下轮再补
 		}
 		need, err := s.cfg.Upstream.BlackcatNeed(a)
 		if err != nil {
