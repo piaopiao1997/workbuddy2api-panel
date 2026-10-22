@@ -311,6 +311,8 @@ func main() {
 		RecordClientInfo:     cfg.Logging.RequestClientInfo,
 		HiddenModels:         livecfg.NormalizeHiddenModels(cfg.Models.Hidden),
 		ModelAliases:         livecfg.NormalizeModelAliases(cfg.Models.Aliases),
+		// 模型降级路由表（pool.model_fallback）：6004 限流时同账号改用等价模型。
+		ModelFallback: cfg.Pool.ModelFallback,
 	})
 	// 用量记录器：与 state 文件同目录，随 state_file 配置一起搬移。
 	// datapath 由 state 文件路径推出，避免再加一个配置项。
@@ -411,7 +413,9 @@ func main() {
 		Usage:        rec,
 		RequestLog:   requestLog,
 		PromptMode:   cfg.Prompt.Mode,
-		PromptText:   cfg.PromptText,
+		// 模型降级路由表：读 live 快照（支持面板热更，改完即生效、无需重启）。
+		ModelFallback: func() map[string]string { return live.Load().ModelFallback },
+		PromptText:    cfg.PromptText,
 		// 来源记录开关经 livecfg 热生效；此处同时填静态字段，供 Live 为 nil 的
 		// 裸用/测试路径拿到同一缺省值。
 		RecordClientInfo: cfg.Logging.RequestClientInfo,
