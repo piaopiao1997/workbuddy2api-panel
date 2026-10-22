@@ -139,6 +139,13 @@ git branch -D pr/<起个名字>                # 本地清掉；远端 public �
 | 2026-10-21 | `025cc10` | `278ced3` | 跟（依赖） | 日界/钟点一律按 CST —— `3dfe46c` 的 `internal/cst` 由它引入，必须先 pick。手工解 3 处冲突：cooldown.go/client.go 的 import（两边都留）、enterprise_gate_test.go 整块删（apiKeyTestScheduler 属未跟的 5ce1a2f） |
 | 2026-10-21 | `3dfe46c` | `efb70b6` | 跟 | 账号级摊开（issue #45）—— 治「同一秒打全池」；**默认 0 关闭，需配 account_spread_minutes 才生效** |
 | 2026-10-21 | `bc3e053` | `60fbcd6` | 跟（依赖） | 思考档位日志区分 requested/effective —— `4f60a4c` 的测试依赖它给 prepareBodyOpt 加的第三返回值，不 pick 则 upstream 包编译失败 |
+| 2026-10-22 | `edd0dba` | `035371e` | 跟 | 会话/链路 ID 对齐官方客户端形态（v4 UUID 36 字符）—— issue #51 |
+| 2026-10-22 | `8f7366f` | `6340499` | 跟 | 出站头族与标识按两版真机对齐：buildCacheKey 生成 36 字符 UUID，不再带 wb2a-<uid8>- 前缀与明文 uid；headers.go 补充对齐 —— issue #51 |
+| 2026-10-22 | `d030e0f` | `d876795` | 跟 | 清掉上报体里的 wb2api-* 自证前缀（autotask/scheduler/travel/blackcat/mp_events 5 处）；手解 mp_events.go import 冲突（保留 proxypool + session）—— issue #51 |
+| 2026-10-22 | `5605781` | `f0c839e` | 跟 | body 侧补 conversationRequestId，保持头体一致 —— issue #51 |
+| 2026-10-22 | `6f6db4b` | `1784c50` | 跟 | 个人号不再注入 X-Auth-Method / X-Userinfo（消除非官方多余头）—— issue #51 |
+| 2026-10-22 | `b0320cf` | `9d46170` | 跟 | 预算被思考吃光时空回复 → 同额度关思考重发一次（治空回） |
+
 
 
 **未跟记录**（省得下次重复评审）
