@@ -105,8 +105,13 @@ func TestRunCatchesUpMissedSlots(t *testing.T) {
 	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
 	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}
 
-	// 取「今天已经过去」的整点：now 的上一小时（00:xx 时取 0 点，其 00:00 也已过）。
-	past := time.Now().Hour() - 1
+	// 取「今天已经过去」的整点：CST 当前的上一小时（CST 00:xx 时取 0 点，其 00:00 也已过）。
+	//
+	// 必须用 cst.Now() 取小时：排程把小时数解释成 CST 时点（nextFireKind 用 cst.Loc），
+	// 而 CI runner 在 UTC。用宿主的 time.Now().Hour() 时，UTC 16:00–23:59 期间取到的
+	// 小时在 CST 是「今天还没到」，missedToday 判不出补跑，断言必然失败
+	// （binaries #317 实测：UTC 16:13 失败，此前所有 run 都在 15:42 UTC 之前）。
+	past := cst.Now().Hour() - 1
 	if past < 0 {
 		past = 0
 	}
@@ -814,4 +819,15 @@ func TestBlackcatEligibility(t *testing.T) {
 			t.Errorf("%s: blackcatEligible=%v want %v", c.name, got, c.want)
 		}
 	}
+}
+
+// TestMissedSlotsIsHostTimezoneIndependent 把 time.Local 换成 UTC 再跑一遍启动补跑
+// 断言：排程的小时数按 CST 解释，CI runner 在 UTC，用宿主时钟取「上一小时」时
+// UTC 16:00 之后那个时点在 CST 还是未来，补跑不触发（binaries #317 实测）。
+// 钉住「取当前时刻必须走 cst.Now()」。
+func TestMissedSlotsIsHostTimezoneIndependent(t *testing.T) {
+	old := time.Local
+	time.Local = time.UTC
+	defer func() { time.Local = old }()
+	TestRunCatchesUpMissedSlots(t)
 }
