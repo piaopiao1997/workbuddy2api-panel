@@ -96,7 +96,8 @@
     "account_share": {},
     "cost_explore_interval": "30m",
     "credit_floor": 100,
-    "reserve_credits": 10
+    "reserve_credits": 10,
+    "model_fallback": {}
   },
   "session_sticky": {
     "enabled": true,
