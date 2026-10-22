@@ -277,23 +277,29 @@ func acceptLanguageFor(a *auth.Auth) string {
 // 反而是伪造指纹，比不发更容易被识别。
 //
 // uin 段取 uid（不是账号的 uin 数字串）：反编译逻辑写的就是 {uin: n.uid}。
+//
+// 2026-10-22 补充（issue #51）：**个人号即使 token 带 token_source 也不发**。
+// 起因是 `login.sh` 的设备流拿到的 CN token 声明里有 `token_source: "enterprise_switch"`，
+// 旧逻辑据此给个人号注入了 `X-Auth-Method: enterprise_switch` + `X-Userinfo`，
+// 而国际版 5.8.4 与国内版 5.8.3 真机实测的个人号**两个头都不发**
+// （capture/raw3/001-chat.json、capture/raw8/002-chat.json）。
+// `token_source` 描述的是 token 的来路（企业切换），不是账号身份；个人号的
+// `enterprise_id` 为空，本就不存在「企业」这层语义。判定只看 EnterpriseID。
 func (c *Client) injectIdentityHeaders(req *http.Request, a *auth.Auth) {
 	if a == nil || a.UID == "" {
+		return
+	}
+	enterprise := strings.TrimSpace(a.EnterpriseID)
+	if enterprise == "" {
+		// 个人号：与官方客户端一致，三头全不发（不看 token_source）。
 		return
 	}
 	method := a.TokenSource()
 	if method != "" {
 		req.Header.Set("X-Auth-Method", method)
 	}
-	enterprise := strings.TrimSpace(a.EnterpriseID)
-	if enterprise == "" && method == "" {
-		// 个人号且 token 无 token_source：与官方客户端同样三头全不发。
-		return
-	}
 	payload := map[string]any{"uin": a.UID}
-	if enterprise != "" {
-		payload["owner_uin"] = enterprise
-	}
+	payload["owner_uin"] = enterprise
 	if method != "" {
 		payload["token_source"] = method
 	}
