@@ -184,7 +184,7 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	// 也不自洽，是最容易被上游按「非客户端形态」识别出来的一处。
 	req.Header.Set("X-Domain", c.desktopHost(a))
 	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-Request-ID", deriveID(a, "req")+fmt.Sprintf("%d", time.Now().UnixNano()%1e6))
+	req.Header.Set("X-Request-ID", session.NewMessageID())
 	if a.UID != "" {
 		req.Header.Set("X-User-Id", a.UID)
 	}
@@ -483,7 +483,9 @@ func (c *Client) MarketExpertList(a *auth.Auth, expertType string) ([]MarketExpe
 // expert_actual_use 等 JOIN 事件的 requestId 必须是该服务端 id——自造 UUID 不计数
 // （客户端 resolveRealRequestId 同款语义，Sunny row 2113 实证）。
 func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversationID, requestID string, err error) {
-	conversationID = fmt.Sprintf("wb2api-conv-%d", time.Now().UnixNano())
+	// 会话 ID 用官方形态（v4 UUID）。旧实现是 `wb2api-conv-<UnixNano>`——项目缩写 +
+	// 纳秒时间戳直接当 X-Conversation-ID 打给上游，是 issue #51 里最直白的一处自证。
+	conversationID = session.NewConversationID()
 	body := map[string]any{
 		"model": "fast-model",
 		"messages": []any{
@@ -503,37 +505,18 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	if err != nil {
 		return "", "", err
 	}
-	h := req.Header
-	h.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	h.Set("Content-Type", "application/json")
-	h.Set("Accept", "text/event-stream")
-	// chat 链路用 SDK 形态 UA（首段恒驼峰 WorkBuddy，见 defaultWorkBuddyUAFor）：
-	// 不能复用 desktopUAFor——那是 /v2/report 等非 SDK 请求的双品牌段形态，
-	// 2026-10-21 国际版真机 chat 抓包实测与此不同。
-	h.Set("User-Agent", c.userAgent(a))
-	// X-Domain 是主机名不是 URL（真机实测 www.workbuddy.ai）。原先塞的是带 scheme
-	// 的 chatBase，与 /v2/report 同一处笔误，一并改正。
-	h.Set("X-Domain", c.desktopHost(a))
-	h.Set("X-Product", "SaaS")
-	h.Set("X-Private-Data", "true")
-	h.Set("X-User-Id", a.UID)
-	// 身份头族（企业与带 token_source 的号才有）：与 ChatHeaders 同源，
-	// 避免这条手搓头路径比主 chat 路径少一族指纹。
-	c.injectIdentityHeaders(req, a)
-	h.Set("X-Conversation-ID", conversationID)
-	// 渠道校验三件套的另两件（缺任一头上游 400 code=11-128 "conversation id missing"）：
-	// 该路径手搓头绕过 ChatHeaders，此前只带了 Conversation-ID。
-	h.Set("X-Conversation-Request-ID", session.NewMessageID())
-	h.Set("X-Conversation-Message-ID", session.NewMessageID())
-	h.Set("X-Request-ID", fmt.Sprintf("%d", time.Now().UnixNano()))
-	h.Set("X-Agent-Intent", "craft")
-	h.Set("X-Agent-Type", "main")
-	h.Set("X-IDE-Name", "WorkBuddy")
-	h.Set("X-IDE-Type", "WorkBuddy")
-	h.Set("X-IDE-Version", "5.5.6")
-	h.Set("x-codebuddy-request", "1")
+	// 头族一律走 ChatHeaders：这条路径原先手搓了 20 多行头，结果与主 chat 路径长期漂移
+	// （缺 X-Trace-ID / X-B3-* / x-stainless-* / acp-connection-id，X-IDE-Version 写死
+	// 5.5.6，X-Request-ID 还是十进制纳秒）。手搓头本身就是漂移的根因——统一出口后
+	// 主路径改一次这里自动跟随。
+	meta := ChatMeta{
+		ConversationID:        conversationID,
+		CacheKeyID:            conversationID,
+		ConversationRequestID: session.NewMessageID(),
+	}
+	c.ChatHeaders(req, a, "", meta)
 	if expertID != "" {
-		h.Set("X-Expert-Id", expertID)
+		req.Header.Set("X-Expert-Id", expertID)
 	}
 	if os.Getenv("WB2A_DEBUG_CHAT") != "" {
 		fmt.Printf("[dbg] URL=%s\n", req.URL)
