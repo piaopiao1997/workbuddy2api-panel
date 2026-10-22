@@ -1358,6 +1358,9 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 	}
 	prepStart := time.Now()
 	prepared, requested, effort := c.prepareBody(body, a.Realm(), a.UID, cacheKeySource(meta))
+	// body 侧会话字段（issue #51）：把本轮 ID 同时写进消息体，与出站头保持头体一致
+	// （官方桌面端头与体都带 conversationRequestId）。见 conv_fields.go。
+	prepared = injectConversationFields(prepared, meta.ConversationRequestID)
 	if timing != nil {
 		timing.Prep += time.Since(prepStart)
 		timing.RequestedEffort = requested // 客户端原始档位（未携带 → 空）

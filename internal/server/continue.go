@@ -75,6 +75,8 @@ type continueReader struct {
 
 	blindRetried bool // 断流盲重试已用（每请求一次；见 canContinue）
 
+	starvedTried bool // 空截断救援已用（每请求一次；见 tryStarvedRetry）
+
 	lastClientAt time.Time // 上次客户端可见输出/keepalive 的时刻（静默节流）
 
 	usage map[string]any // 跨段累计 usage（数字叶子求和）
@@ -270,6 +272,9 @@ func (r *continueReader) endSegment(sawDone bool) {
 	}
 	if r.cur != nil {
 		r.cur.Close()
+	}
+	if r.tryStarvedRetry() {
+		return
 	}
 	if r.canContinue(sawDone) {
 		// 必须是「断流盲重试」还是「length 截断续写」（r.finish 在续写成功后被重置）。

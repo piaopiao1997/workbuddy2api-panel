@@ -10,6 +10,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 )
 
 const mpReportPath = "/v2/report"
@@ -80,7 +81,9 @@ func (c *Client) ReportMPEvent(a *auth.Auth, events ...map[string]any) error {
 // MiniChatSendEvent 构造一条小程序 chat_request_send（Sequential 对话任务计数），
 // 不带 activityId。
 func MiniChatSendEvent(conversationID string) map[string]any {
-	rid := "wb2api-" + clientToken()
+	// rid 用官方形态（32 hex 时间前缀）。旧值 "wb2api-"+clientToken() 把项目缩写
+	// 写进 traceId / rootRequestId / messageId 一起上报（issue #51）。
+	rid := session.NewMessageID()
 	return map[string]any{
 		"eventCode":   "chat_request_send",
 		"inputLength": 14, "isPlan": false, "isAutoExecuteTerminal": false,
@@ -144,7 +147,7 @@ func MiniPlaybookEvents(caseID, caseName string) []map[string]any {
 	send := map[string]any{
 		"eventCode": "playbook_prompt_send", "source": "discover",
 		"promptLength": 96, "isOfficial": 1,
-		"conversationId": "wb2api-mp-pb-" + clientToken(),
+		"conversationId": session.NewConversationID(),
 		"extVersion":     "2.2.8",
 	}
 	for k, v := range base {

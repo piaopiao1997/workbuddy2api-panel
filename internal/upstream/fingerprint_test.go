@@ -149,20 +149,40 @@ func TestIdentityHeadersEnterpriseUserinfo(t *testing.T) {
 	}
 }
 
-// TestIdentityHeadersTokenSourceFromJWT X-Auth-Method 取自 JWT 的 token_source 声明。
-func TestIdentityHeadersTokenSourceFromJWT(t *testing.T) {
+// TestIdentityHeadersPersonalWithTokenSourceSendsNone 个人号即使 token 带
+// token_source 也不发 X-Auth-Method / X-Userinfo（issue #51）。
+//
+// 背景：`login.sh` 的设备流拿到的 CN token 声明里有 token_source=enterprise_switch，
+// 旧逻辑据此给个人号注入了这两个头；而两版客户端的个人号真机抓包都没有它们
+// （capture/raw3/001-chat.json 国际版、capture/raw8/002-chat.json 国内版）。
+// token_source 是 token 的来路，不是账号身份——个人号 enterpriseId 为空即无企业语义。
+func TestIdentityHeadersPersonalWithTokenSourceSendsNone(t *testing.T) {
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"token_source":"enterprise_switch"}`))
-	a := &auth.Auth{UID: "u1", AccessToken: "h." + payload + ".s"}
+	a := &auth.Auth{UID: "u1", AccessToken: "h." + payload + ".s"} // 无 EnterpriseID = 个人号
+	req := httptest.NewRequest("POST", "https://example/v2/chat/completions", nil)
+	New().injectIdentityHeaders(req, a)
+
+	for _, h := range []string{"X-Auth-Method", "X-Userinfo", "X-Id-Source"} {
+		if v := req.Header.Get(h); v != "" {
+			t.Errorf("个人号不该发 %s=%q（官方两版个人号都没有这个头）", h, v)
+		}
+	}
+}
+
+// TestIdentityHeadersEnterpriseWithTokenSource 企业号仍按 token_source 注入。
+func TestIdentityHeadersEnterpriseWithTokenSource(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"token_source":"enterprise_switch"}`))
+	a := &auth.Auth{UID: "u1", EnterpriseID: "ent-1", AccessToken: "h." + payload + ".s"}
 	req := httptest.NewRequest("POST", "https://example/v2/chat/completions", nil)
 	New().injectIdentityHeaders(req, a)
 
 	if got := req.Header.Get("X-Auth-Method"); got != "enterprise_switch" {
-		t.Fatalf("X-Auth-Method=%q want enterprise_switch", got)
+		t.Fatalf("企业号 X-Auth-Method=%q want enterprise_switch", got)
 	}
 	dec, _ := base64.StdEncoding.DecodeString(req.Header.Get("X-Userinfo"))
 	var m map[string]string
 	_ = json.Unmarshal(dec, &m)
-	if m["token_source"] != "enterprise_switch" || m["uin"] != "u1" {
+	if m["token_source"] != "enterprise_switch" || m["uin"] != "u1" || m["owner_uin"] != "ent-1" {
 		t.Fatalf("X-Userinfo=%s", dec)
 	}
 }

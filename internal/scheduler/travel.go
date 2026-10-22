@@ -4,13 +4,13 @@ package scheduler
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -145,7 +145,9 @@ func (s *Scheduler) travelAdopt(a *auth.Auth) {
 		return
 	}
 	// 前置：解锁 first_buddy 任务（幂等；失败不阻塞，让 buddy/first 按既有错误路径暴露）。
-	if err := s.cfg.Upstream.ReportChatActivity(a, fmt.Sprintf("wb2api-adopt-%d", time.Now().UnixMilli()), ""); err != nil {
+	// 会话 ID 用官方形态（v4 UUID）。旧值是 `wb2api-adopt-<毫秒>`——项目缩写 +
+	// 时间戳直接进上报体（issue #51）。
+	if err := s.cfg.Upstream.ReportChatActivity(a, session.NewConversationID(), ""); err != nil {
 		log.Printf("WARN: travel %s: adopt preflight report: %v", logfmt.Label(a.UID, a.Nickname), err)
 	} else {
 		time.Sleep(adoptReportGap) // 给上游事件处理留时间（对齐脚本实测的 1.05s 间隔口径）
