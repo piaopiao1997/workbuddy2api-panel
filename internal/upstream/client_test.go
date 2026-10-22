@@ -697,6 +697,52 @@ func TestFetchModelsOverlaysV3ConfigCapabilities(t *testing.T) {
 	}
 }
 
+// TestV3PromotionsEmbedImageModel 出图模型只出现在 modelPromotions 里时也要进目录。
+//
+// 实测（2026-10-22，global 个人号）：/v3/config 的 data.models 里**没有任何**图片模型，
+// 可用的 hy-image-3.5 只以纯模型定义形态夹在 modelPromotions 中
+// （{"id":"hy-image-3.5","name":...,"tags":["text-to-image","image-to-image"]}，
+// 没有 kind/discount）。只解析 models 会得出「国际版没有出图模型」的假结论，
+// 而它实际可调（200 + usage{output_image_tokens:15000, credit:0.27}）。
+func TestV3PromotionsEmbedImageModel(t *testing.T) {
+	c := testClient(func(r *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(r.URL.Path, "/v3/config") {
+			return jsonResp(200, `{"code":0,"data":{"models":[
+				{"id":"glm-5.2","name":"GLM-5.2","maxInputTokens":1000000,"maxOutputTokens":65536}
+			],"modelPromotions":[
+				{"id":"hy3-free","kind":"discount","modelIds":["glm-5.2"],"priority":200,"discount":{"discountedCredits":"0x","factor":0}},
+				{"id":"hy-image-3.5","name":"HY-Image-3.5","tags":["text-to-image","image-to-image"]},
+				{"id":"kling-video-v3","name":"Kling-Video-V3","tags":["text-to-video","image-to-video"]}
+			]}}`), nil
+		}
+		return jsonResp(200, `{"code":0,"data":{"models":[]}}`), nil
+	})
+	a := &auth.Auth{AccessToken: "at", UID: "u1", Domain: "www.workbuddy.ai"}
+	if _, err := c.FetchModels(a); err != nil {
+		t.Fatalf("fetch models: %v", err)
+	}
+	kinds := map[string]string{}
+	for _, m := range c.GenerationModels("cn") {
+		kinds[m.ID] = m.GenerationKind
+	}
+	if kinds["kling-video-v3"] != "video" {
+		t.Errorf("modelPromotions 里的出视频模型应进留存，实际 %+v", kinds)
+	}
+	// 注意：GenerationModels 还会按 imageRouteRealm 做域过滤（hy-image-3.5 是 global
+	// 模型），所以这里直接看留存本体，验证的是「解析有没有把它收进目录」。
+	stashed := map[string]bool{}
+	for _, m := range c.imageModels["cn"] {
+		stashed[m.ID] = true
+	}
+	if !stashed["hy-image-3.5"] {
+		t.Errorf("modelPromotions 里的出图模型未进留存：%v", c.imageModels["cn"])
+	}
+	// 折扣条目（id 是优惠名而非模型名）不得被当成模型塞进目录。
+	if stashed["hy3-free"] {
+		t.Errorf("折扣条目不应被当作模型：%v", c.imageModels["cn"])
+	}
+}
+
 // TestIsModelRateLimitCodes 模型级限流的 code 集合：6004（已有）与 14003（模型忙）。
 // 14003 若漏收，槽位会落到账号级冷却——一个模型抖动就能冷掉整池（同类实现的线上事故形态）。
 func TestIsModelRateLimitCodes(t *testing.T) {

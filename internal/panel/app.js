@@ -642,11 +642,14 @@ function outCell(m, pr) {
    WorkBuddy 客户端显示的正是生效价。有折扣：生效价大字 + 标签 + 划线牌价，
    悬停带时段说明；无 factor 只有标签（错峰类）：牌价 + 标签。
 
-   出图模型单独一套口径（两域计费模型不同，见 /panel/api/models 的 credit_source）：
-   - CN hunyuan-image-alpha：目录牌价 x5.00，但实扣每张固定 5.71（牌价低 14%），
-     所以两个数都显示，牌价不被实测覆盖、实测也不被牌价盖住；
-   - global gpt-image-2.5-sunburst：目录不报倍率，按输出图像 token 计费
-     （credit = tokens/7300），单张价随 quality/size 变，故显示实扣 + 档位。 */
+   出图模型单独一套口径（2026-10-22 复测，见 /panel/api/models 的 credit_source）：
+   目录对出图模型已不报 credits（CN 混元条目只剩 id/name/tags），这一列基本只剩
+   「实测」一种来源：
+   - CN hunyuan-image-alpha：实扣每张固定 5.71，回执 output_image_coefficient=1，
+     与 size/quality/n 全无关（1024/768/512 + n=2 恒等）；
+   - global hy-image-3.5：实扣每张固定 0.27，回执恒 15000 output_image_tokens，
+     但 low/medium/high 与 512/1024/1536 六档实测同价——token 数不代表单价，
+     按 token 反推价格是错的，只能如实显示回执 credit。 */
 function rateCell(m) {
   const tip = m.promo_note ? ' title="' + esc(m.promo_note) + '"' : '';
   if (m.promo_factor != null && m.promo_credits) {
@@ -693,7 +696,8 @@ function imageRateCell(m) {
     tip = '上游目录不报倍率；此值为上游出图回执 usage.credit' +
       (tier ? '（' + tier + '）' : '') +
       (last && last.output_image_tokens ? '，输出图像 ' + last.output_image_tokens + ' token' : '') +
-      '。该模型按输出图像 token 计费，画质/尺寸不同价不同。';
+      (last && last.output_image_coefficient ? '，回执倍率 ' + last.output_image_coefficient + 'x' : '') +
+      '。实测该模型按张固定计价，画质/尺寸不影响价格。';
   }
   const shown = Number(used).toFixed(2);
   const base = m.credits ? ' <s style="color:var(--ink-3);font-size:11.5px">' + esc(m.credits) + '</s>' : '';

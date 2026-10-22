@@ -4,7 +4,12 @@
 // 所以模型名不走目录校验，按 realm 前缀路由到对应账号池：
 //
 //	cn:hunyuan-image-alpha         国内版（实测 200 + 签名 COS URL）
-//	global:gpt-image-2.5-sunburst  国际版（混元在国际版无路由，回 14401）
+//	cn:hunyuan-image-alpha-edit    国内版图生图
+//	global:hy-image-3.5            国际版（2026-10-22 实测 200 + credit 0.27/张）
+//	global:gpt-image-2.5-sunburst  已下架（400 code=14401 route config not found）
+//
+// 裸名 → realm 的映射表在 upstream（imageRouteRealm），已下架模型表为 imageDeadModels；
+// 两者都只写实测过的组合，未知模型照旧放行（不猜）。
 //
 // 请求体只把 model 换成裸名（前缀是网关路由协议，上游只认裸名），其余原样透传；
 // multipart 请求（OpenAI SDK 的 images.edit 走这条）就地转成上游要的 JSON（图片转 data URL）。
@@ -204,7 +209,7 @@ func recordImageUsage(h *Handler, st *chatStat, realm, uid, bare, modelRate stri
 			if quality == "" {
 				quality, _ = req["quality"].(string)
 			}
-			h.cfg.Upstream.RecordImageCharge(realm, bare, size, quality, u.Credit, u.ImageTokens)
+			h.cfg.Upstream.RecordImageCharge(realm, bare, size, quality, u.Credit, u.ImageTokens, u.Coefficient)
 		}
 	}
 	imgs := u.ImageCounts

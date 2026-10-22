@@ -1781,7 +1781,14 @@ type v3ModelPromotion struct {
 	Enabled  bool     `json:"enabled"`
 	Priority int      `json:"priority"`
 	ModelIDs []string `json:"modelIds"`
-	Badge    *struct {
+	// ID / Name / Tags：优惠数组里还夹着**纯模型定义**（无 kind/discount，只有
+	// id+name+tags）。实测 2026-10-22：global 的 hy-image-3.5 只出现在这里、
+	// data.models 里没有——只按 models 解析会得出「国际版没有出图模型」的假
+	// 结论（实际可调：200 + usage{output_image_tokens:15000, credit:0.27}）。
+	ID   string   `json:"id"`
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+	Badge *struct {
 		Label string `json:"label"`
 	} `json:"badge"`
 	Discount *struct {
@@ -2150,6 +2157,22 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 		mi.Credits = ""
 		mi.Tags = nil
 		out[id] = mi
+	}
+	// 优惠数组里内嵌的模型定义（只有 id/name/tags，没有 kind/discount）：上游把
+	// 部分出图模型只放这里（实测 2026-10-22 global 的 hy-image-3.5），data.models
+	// 里没有。补进目录后，stashGenerationModels 会把它按 image 留存并单列，
+	// nonChatModel 也会照旧把它挡在对话列表之外——不必另写一套过滤。
+	// 只补媒体生成类（tags 命中 text-to-image / image-to-image / video）：其它
+	// 形态没有实测样本，不猜。
+	for _, pr := range env.Data.ModelPromotions {
+		id := strings.TrimSpace(pr.ID)
+		if id == "" || generationKind(pr.Tags) == "" {
+			continue
+		}
+		if _, exists := out[id]; exists {
+			continue
+		}
+		out[id] = ModelInfo{ID: id, Name: pr.Name, Tags: pr.Tags}
 	}
 	// 挂当前生效的限时优惠（modelPromotions）：Credits 字段是**牌价**（转正后基准
 	// 倍率，如 hy4-preview-f 的 x0.29），而 WorkBuddy 客户端显示的是生效价（试用/

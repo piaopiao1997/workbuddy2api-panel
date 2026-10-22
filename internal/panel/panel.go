@@ -517,12 +517,13 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 	// 「模型与档位」也必须看得到——否则用户不知道有哪些能调。字段与对话模型同口径，
 	// 另加 image_generation 标记（前端据此标「出图」）。视频不列：没有网关端点。
 	//
-	// 倍率口径（2026-10-18 复测，两域计费模型不同）：
-	//   - 牌价 `credits` 只部分模型有：CN hunyuan-image-alpha 报 x5.00，**但实扣是每张
-	//     固定 5.71**（牌价低 14%，不能拿牌价当实付）；
-	//   - global gpt-image-2.5-sunburst 目录里连 credits 键都没有，因为它是**按输出
-	//     图像 token 计费**（credit = tokens/7300），单张价格随 quality/size 变（1024²
-	//     low 0.55 / high 4.84）。
+	// 倍率口径（2026-10-22 复测，两个个人号直连上游）：
+	//   - 目录**不再给出图模型报 credits**：CN hunyuan-image-alpha 的条目只有
+	//     id/name/tags（2026-10-18 曾报 x5.00，现已无该键），所以「倍率」只能来自
+	//     出图回执里的 usage.credit——牌价这列现在对出图模型基本恒空；
+	//   - CN hunyuan-image-alpha 实扣每张固定 5.71，回执带 output_image_coefficient:1；
+	//   - global hy-image-3.5 实扣每张固定 0.27，回执恒 output_image_tokens:15000，
+	//     不带 coefficient；旧 global 模型 gpt-image-2.5-sunburst 已下架（14401）。
 	// 故这里三个字段并列输出，前端各按语义展示，绝不用均值覆盖牌价：
 	//   credits         上游目录牌价（可能没有）
 	//   measured_credit 账本里该模型的平均实扣（落盘口径，跨重启）
@@ -565,6 +566,11 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 					"quality":             last.Quality,
 					"output_image_tokens": last.LastTokens,
 					"at":                  last.LastAt,
+				}
+				// 上游回执里的「倍率」原值（CN 恒 1；global 不回该字段则省略）——
+				// 只透传不重算：它是上游口径，拿它乘单价得出的数会跟 credit 对不上。
+				if last.LastCoefficient > 0 {
+					e["charge_last"].(map[string]any)["output_image_coefficient"] = last.LastCoefficient
 				}
 			}
 			if _, hasCatalog := e["credits"]; hasCatalog && e["credits"] != "" {
