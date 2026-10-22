@@ -301,10 +301,20 @@ function rateLimitMeta(row, now) {
 function rateLimitRowsHtml(rows, now) {
   const list = Array.isArray(rows) ? rows.filter(row => row && row.model) : [];
   if (!list.length) return '';
+  // 降级路由表（overview 的 model_fallback）：限流的模型若配了等价模型，标注
+  // 「⤳ 已路由至 X」—— 否则用户看到「v4.1 限流」会以为服务断了，实际请求已被
+  // 自动改道到等价模型继续服务。这条是用户实测反馈要求可见的。
+  const fb = (overviewData && overviewData.model_fallback) || {};
   return '<div class="rate-limits">' + list.map(row => {
     const m = rateLimitMeta(row, now);
+    // 双重查找：上游台账里的 model 可能带 realm 前缀（cn:x），配置里是裸名。
+    const bare = String(m.model || '').replace(/^[a-z]+:/, '');
+    const alt = fb[row.model] || fb[bare] || '';
+    const route = alt ? '<span class="fb">⤳ 已路由至 ' + esc(alt) + '</span>' : '';
+    const title = alt ? m.title + '；已自动改道到 ' + alt : m.title;
     return '<div class="rate-limit ' + (m.kind === 'model_unavailable' ? 'model-unavailable' : '') +
-      '" title="' + esc(m.title) + '"><b>' + esc(m.model) + '</b><span>' + esc(m.detail) + '</span></div>';
+      '" title="' + esc(title) + '"><b>' + esc(m.model) + '</b><span>' + esc(m.detail) + '</span>' +
+      route + '</div>';
   }).join('') + '</div>';
 }
 

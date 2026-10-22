@@ -74,6 +74,10 @@ type Config struct {
 	// 写入；空或文件不存在 = model_probes 端点返回空集，面板不显示任何实测标注）。
 	// 只读展示：网关不解析、不依赖其内容做任何路由/出站决策。
 	ProbeFile string
+	// ModelFallback 模型降级路由表（读 live 快照，支持热更）。nil = 未配置。
+	// 面板据它在限流提示里标注「已路由至 X」—— 否则用户看到「v4.1 限流」
+	// 会以为服务断了，实际请求已被自动改道到等价模型继续服务。
+	ModelFallback func() map[string]string
 }
 
 // Panel 管理面板 handler。挂载方式：外层 mux Handle("/panel/", panel)，
