@@ -1289,6 +1289,30 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.outcome = reqlog.OutcomeHTTPError
 			return
 		}
+		// 空截断救援（见 starved.go）：额度被思考吃光、正文零字节。非流式这一侧
+		// 没有 continueReader，救援在这里做——同预算关思考重发一次、重新聚合。
+		if aggregateStarved(resp) && bodyHasOutputLimit(body) {
+			if rb, ok := starvedRetryBody(body); ok {
+				if rc2, st2, _, e2 := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, rb, clientIP, chatMeta, nil); e2 == nil && st2 < 400 && rc2 != nil {
+					if resp2, e3 := upstream.Aggregate(rc2); e3 == nil {
+						rc2.Close()
+						resp = resp2
+						log.Printf("INFO: [starved] non-stream acct=%s model=%s: 预算被思考吃光（正文 0B）→ 同额度关思考重发成功",
+							logfmt.Label(acct.UID, acct.Nickname), bareModel)
+					} else {
+						rc2.Close()
+						log.Printf("WARN: [starved] non-stream acct=%s model=%s: 重发聚合失败: %v",
+							logfmt.Label(acct.UID, acct.Nickname), bareModel, e3)
+					}
+				} else {
+					if rc2 != nil {
+						rc2.Close()
+					}
+					log.Printf("WARN: [starved] non-stream acct=%s model=%s: 关思考重发失败（status=%d err=%v）→ 保留原截断响应",
+						logfmt.Label(acct.UID, acct.Nickname), bareModel, st2, e2)
+				}
+			}
+		}
 		// 标记修复（非流式）：把正文里的原生工具调用标记还原成 message.tool_calls。
 		// 只在「没有结构化 tool_calls」且「finish_reason 为 stop」时生效（见 dsml.go）；
 		// 名单为空时走弱判定（tools 声明在中转环节丢失是常态）。
