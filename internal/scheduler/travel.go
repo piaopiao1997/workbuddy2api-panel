@@ -53,7 +53,7 @@ func (s *Scheduler) RunTravelNow() {
 func (s *Scheduler) runTravel(ctx context.Context, spread bool) {
 	plan := s.spreadPlan(taskTravel, spread, cst.Now())
 	first := true
-	for _, st := range s.cfg.Pool.List() {
+	for _, st := range plan.ordered(s.cfg.Pool.List()) {
 		if st.Disabled {
 			continue
 		}

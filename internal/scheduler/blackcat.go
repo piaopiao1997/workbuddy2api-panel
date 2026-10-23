@@ -40,7 +40,7 @@ func (s *Scheduler) runBlackcat(ctx context.Context, spread bool) {
 		return
 	}
 	plan := s.spreadPlan(taskBlackcat, spread, cst.Now())
-	for _, st := range s.cfg.Pool.List() {
+	for _, st := range plan.ordered(s.cfg.Pool.List()) {
 		// 暂停选号（paused）账号跳过：夜猫子是全任务体系里**唯一「整任务都是真实模型
 		// 对话」**的（RunNightChats 逐条 ChatStream 发 glm-5.2 短对话），与「让位防风控」
 		// 正面冲突。旅行 / 成长任务 / 连登管家都走上报与领奖 RPC，照常参与

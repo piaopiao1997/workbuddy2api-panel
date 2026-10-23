@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 )
 
 // accountSpread 本轮各账号的执行时刻（绝对时间，计划生成时刻为起点）。
@@ -77,6 +78,38 @@ func (a *accountSpread) wait(ctx context.Context, uid string) bool {
 		return true
 	}
 	return sleepCtx(ctx, time.Until(at))
+}
+
+// ordered 把账号列表按本轮偏移升序重排，供调度器按序遍历。
+//
+// 为什么必须重排：wait() 只能往后等（sleepCtx 对 d<=0 立即放行）。若按 UID 顺序
+// 遍历，实际执行时刻是「前面所有偏移的运行最大值」——均匀分布下前 6 个号的最大值
+// 期望就有窗口的 6/7，等于前几个号就把时钟顶到窗口尾部，其余账号的偏移全成了过去、
+// 被一次性放行，窗口形同虚设。2026-10-23 实测：340 号，前 37 分钟只签 5 个，最后
+// 11 分钟挤了 335 个。按偏移升序遍历后，运行最大值恒等于当前偏移，窗口才是真摊开。
+//
+// 计划外的账号（本轮新加入）排最后、保持原有相对顺序：它们没有偏移可等，应当立即
+// 执行，而不是被塞进窗口中间打乱已排好的节拍。
+func (a *accountSpread) ordered(list []pool.Status) []pool.Status {
+	if a == nil || len(a.at) == 0 {
+		return list
+	}
+	out := make([]pool.Status, len(list))
+	copy(out, list)
+	sort.SliceStable(out, func(i, j int) bool {
+		ti, iok := a.at[out[i].UID]
+		tj, jok := a.at[out[j].UID]
+		switch {
+		case iok && jok:
+			return ti.Before(tj)
+		case iok:
+			return true
+		case jok:
+			return false
+		}
+		return false
+	})
+	return out
 }
 
 // spreadParams 摊开窗口与最小间隔（窗口 <= 0 = 关闭）。与其它排程参数同口径在
