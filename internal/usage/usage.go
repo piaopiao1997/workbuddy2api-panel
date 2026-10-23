@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
+	"github.com/misakano7545/workbuddy2api-panel/internal/safefile"
 )
 
 // hourlyKeep 小时桶的保留时长；超出后折叠为日桶。

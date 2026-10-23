@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/proxypool"
 )
 
 // 全 dead 时必须报 ErrAllDead，而不是返回 (nil, nil) 让调用方静默直连。

@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
+	"github.com/misakano7545/workbuddy2api-panel/internal/safefile"
 )
 
 // modelSeedFS 仓库种子版 model.json（context_catalog 静态表 27 值迁移，source=seed）。

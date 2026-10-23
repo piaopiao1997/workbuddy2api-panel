@@ -12,8 +12,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/pool"
 )
 
 // accountSpread 本轮各账号的执行时刻（绝对时间，计划生成时刻为起点）。

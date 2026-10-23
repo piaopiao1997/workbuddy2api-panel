@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/pool"
 )
 
 // TestRunGrowthQueueNowUnguarded 排程入口在未接线（无上游）时安全返回，不 panic。

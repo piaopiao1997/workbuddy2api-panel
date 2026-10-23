@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
 )
 
 // ErrStat 单条「账号 × 错误类型」聚合行。

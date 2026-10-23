@@ -15,8 +15,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/safefile"
 )
 
 // ranToday 报告 kind 今天是否已经补跑过。未配置 RunStampFile 时恒 false（旧行为）。

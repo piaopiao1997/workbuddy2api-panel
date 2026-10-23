@@ -4,7 +4,7 @@ package panel
 import (
 	"net/http"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/proxypool"
 )
 
 // proxiesHandler 返回当前代理池快照（密码脱敏）。

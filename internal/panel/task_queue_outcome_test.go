@@ -3,7 +3,7 @@ package panel
 import (
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
 
 func TestGrowthQueuePreservesClaimFailure(t *testing.T) {

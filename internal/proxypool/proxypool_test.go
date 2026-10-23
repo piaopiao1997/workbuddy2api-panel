@@ -5,7 +5,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/proxypool"
 )
 
 func TestProxyPool_ModesAndAssignment(t *testing.T) {

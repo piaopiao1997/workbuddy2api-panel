@@ -29,7 +29,7 @@ package pool
 import (
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/proxypool"
 )
 
 // clearCoolingLocked 清冷却域：until/coolKind/softStreak/modelCooldowns 全归零，

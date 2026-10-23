@@ -20,8 +20,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
+	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
 
 // searchAttempts 失败换号上限（与 images 同量级：人工/低频触发，3 次足够绕开坏号）。

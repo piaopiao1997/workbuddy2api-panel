@@ -13,7 +13,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/proxypool"
 )
 
 // 连接层参数集中定义（与 server/backoff.go 同风格：一处定义，测试可回读断言）。

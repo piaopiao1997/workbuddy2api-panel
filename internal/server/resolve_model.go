@@ -1,6 +1,6 @@
 package server
 
-import "github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+import "github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 
 // resolveModel 解析模型名协议（PLAN D6）：
 //

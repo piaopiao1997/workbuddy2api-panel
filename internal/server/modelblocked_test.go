@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
 )
 
 // TestChatModelBlockedReportsModelUnavailable 池里号都在、只是每个号都对该模型处于

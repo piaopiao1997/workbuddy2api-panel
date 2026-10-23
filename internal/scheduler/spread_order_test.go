@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/pool"
 )
 
 // TestSpreadOrderedAvoidsTailPileup 复现 2026-10-23 的「假摊开」，并验证 ordered() 修复。

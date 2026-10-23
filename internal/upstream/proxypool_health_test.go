@@ -15,7 +15,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/proxypool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/proxypool"
 )
 
 // resetDefaultPool 把全局默认池恢复成「纯净 off 模式」，避免测试间互相污染。

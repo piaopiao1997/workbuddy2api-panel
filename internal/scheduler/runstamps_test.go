@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
 )
 
 // 同一天重启多次只补跑一次：第一次启动补了哪几类，重启后就不该再补哪几类。

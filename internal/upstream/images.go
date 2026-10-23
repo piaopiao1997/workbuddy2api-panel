@@ -24,7 +24,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
 )
 
 // 图像通道（chatBase 域，与 growth/report 同 base 同头）。

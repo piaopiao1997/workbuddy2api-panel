@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
 )
 
 func TestJitterIsStableAndInsideWindow(t *testing.T) {

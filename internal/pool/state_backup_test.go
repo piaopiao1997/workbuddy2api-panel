@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
 )
 
 // TestBackupStateToWritesSnapshot 备份必须包含被删账号的禁用原因。

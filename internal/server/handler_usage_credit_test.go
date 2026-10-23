@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/pool"
 )
 
 // 移植上游 PR #104：计费字段合法性闸门（流式/聚合/解析层同口径）。
