@@ -484,21 +484,23 @@ function renderAccounts(list) {
         '<span class="usage-item usage-rate"><b>' + rate + '</b></span>' +
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
-      '<td class="acts">' +
+      '<td class="acts"><div class="acts-inner">' + [
         // 无个人成长体系的账号（企业版 / 静态 API Key）不渲染「签到」「任务」：前者
         // 上游 400「企业账号不支持该操作」，后者 403 growth-only；只留「额度」，点它走
         // /balance，额度由 upstream 的企业口径端点（get-enterprise-user-usage）填充。
+        // 六个动作按固定槽位输出，缺位留空 span —— CSS 用 grid 固定列宽，逐行对齐。
         (personal ?
-          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' : '') +
-        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
+          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' : ''),
+        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>',
         (personal ?
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : '') +
+          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : ''),
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
-                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')) +
-        (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
-        '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
-      '</td></tr>';
+                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')),
+        (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
+        '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
+      ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
+      '</div></td></tr>';
   }).join('');
 }
 
