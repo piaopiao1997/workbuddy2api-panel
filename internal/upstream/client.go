@@ -1161,6 +1161,23 @@ func (c *Client) RefreshToken(a *auth.Auth) error {
 
 // RefreshTokenIfNeeded 按需刷新（请求路径 / signin 用）：先快速判断是否临近
 // 过期；进入刷新事务后再双检一次，等锁期间别人已刷好就直接复用。
+// VerifySessionAlive 强制刷新一次 token，用来**验证 session 是否真的失效**。
+//
+// 为什么需要（20261024 实案）：网关 401（APISIX/openresty 的 HTML 页，无业务信封）
+// 被一律判为 session dead，连续 3 次即禁用账号。但实测同一批账号 revive 后立刻
+// 恢复正常（连续 3 次请求均 200）—— 说明那批 401 是网关侧的**瞬时拦截**（风控/
+// 边缘节点抖动），不是 token 失效。按 401 次数禁用会误杀健康账号。
+//
+// 判据：token 真失效时 refresh 端点必然拒绝（invalid_grant / session dead 类错误）；
+// 而网关瞬时拦截的账号，refresh 仍会成功。故「先 refresh 验证，再决定是否计死」
+// 是唯一能直接区分两者的手段 —— 401 本身分不出来（两种成因的响应体一模一样）。
+//
+// 返回 nil = session 仍有效（401 属瞬时拦截，调用方应清零计数）；
+// 返回非 nil = refresh 真的失败（调用方按 session dead 处置）。
+func (c *Client) VerifySessionAlive(a *auth.Auth) error {
+	return c.refresh(a, 0, true)
+}
+
 func (c *Client) RefreshTokenIfNeeded(a *auth.Auth, within time.Duration) error {
 	if !a.NeedsRefresh(within) {
 		return nil

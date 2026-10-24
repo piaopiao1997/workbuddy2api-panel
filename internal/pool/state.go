@@ -58,6 +58,19 @@ func (p *Pool) NoteSessionDeadWith(uid, reason string) bool {
 	return true
 }
 
+// NoteSessionAlive 清零 session dead 计数（refresh 验证成功 → session 仍有效）。
+//
+// 为什么需要（20261024）：网关 401 有两种成因且响应体一样，只能靠 refresh 区分。
+// 判定为「瞬时拦截」时必须清零——否则多次瞬时拦截会累积到阈值（3 次）把健康账号
+// 禁用掉，这正是本次误杀两号的机制。
+func (p *Pool) NoteSessionAlive(uid string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.byUID[uid]; ok && e.sessionDeadFails != 0 {
+		e.sessionDeadFails = 0
+	}
+}
+
 // ClearSessionDead 清连续 12153 计数——账号被证明未死的任何时刻调用：
 // refresh 成功（RunKeepaliveNow）、chat 成功（NoteSuccess）、手工复活（ReviveDisabled）。
 func (p *Pool) ClearSessionDead(uid string) {
