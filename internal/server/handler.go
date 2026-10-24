@@ -1910,8 +1910,46 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		//     一次就禁会在上游抖一下时把整池打光（这个坑本项目踩过一次）。死号在阈值
 		//     内仍会被选中重试，但最多 3 次即出池，不再每请求刷 401。
 		if uerr != nil && upstream.IsGatewayUnauthorized(uerr.Status, body) {
+			// 先 refresh 求证再计死：网关 401 有两种成因，响应体完全一样（APISIX/
+			// openresty 的 HTML 页，无业务信封），单看 401 分不出来——
+			//   a) token 真失效 → refresh 被拒 → 该计死；
+			//   b) 网关瞬时拦截（风控/边缘抖动）→ refresh 仍成功 → 不该罚。
+			// 实测（2026-10-24 issue #66）：两号各累计 3 次 401 被禁，revive 后立刻
+			// 全 200，即情形 b。不清零计数，多次瞬时拦截会累积到阈值误杀健康号。
+			// 与 balance_401.go 同一套求证逻辑（那里已验证过）。
+			//
+			// 代价：每个网关 401 多一次 refresh 往返；refresh 轻量且 401 低频，另由下面
+			// 的软冷却兜住「同一账号每请求都来问一次」。
+			if acct := h.cfg.Pool.AuthByUID(uid); acct != nil && acct.RefreshTokenValue() != "" && h.cfg.Upstream != nil {
+				rerr := h.cfg.Upstream.RefreshToken(acct)
+				if rerr == nil {
+					// 上游已轮换 RT：必须落盘，否则重启拿旧 RT 刷新 = 账号真死。
+					if serr := acct.SaveAtomicRetry(); serr != nil {
+						log.Printf("ERR: [server] 网关 401 后 refresh 成功但落盘失败: %v", serr)
+					}
+					h.cfg.Pool.ClearSessionDead(uid)
+					// 用 CooldownSoftRate 而非固定 Cooldown：60s 起按 softStreak 翻倍
+					// （封顶 soft_rate_max），任何一次成功即清零。防「chat 恒 401 但
+					// refresh 恒成功」的降级 token 每 60s 轮换一次 RT（1440 次/天）。
+					h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "gateway 401 (refresh ok, transient)")
+					log.Printf("INFO: [server] 账号 %s 网关 401 但 refresh 成功 → 瞬时拦截，不计 session dead",
+						logfmt.Label(uid, ""))
+					return
+				}
+				// 只有上游**应用层明确拒绝**才算 token 失效。refresh 端点同样挂在
+				// /v2/* 上，边缘瞬时拦截时它也回 HTML 页（401/403 无业务信封）——
+				// 那是「拦截」不是「判词」，计入就等于换个地方复发同一个误杀。
+				var re *upstream.Error
+				if !errors.As(rerr, &re) || re.Status >= 500 || re.Status == http.StatusTooManyRequests ||
+					upstream.IsGatewayUnauthorized(re.Status, re.Msg) || upstream.IsWafBlocked(re.Status, re.Msg) {
+					h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "gateway 401 (refresh inconclusive)")
+					log.Printf("INFO: [server] 账号 %s 网关 401，refresh 未给出明确判词 → 不计 session dead: %v",
+						logfmt.Label(uid, ""), rerr)
+					return
+				}
+			}
 			if h.cfg.Pool.NoteSessionDeadWith(uid, gatewayUnauthorizedReason) {
-				log.Printf("WARN: [server] 账号 %s 连续 %d 次网关 401（token 被上游判无效）→ 禁用，需重新登录",
+				log.Printf("WARN: [server] 账号 %s 连续 %d 次网关 401 且 refresh 判死 → 禁用，需重新登录",
 					logfmt.Label(uid, ""), pool.SessionDeadThreshold())
 			}
 			return
