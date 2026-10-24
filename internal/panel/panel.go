@@ -156,6 +156,10 @@ const loginTTL = 15 * time.Minute
 type loginSession struct {
 	created time.Time
 	realm   string // "cn" / "global"，缺省 cn
+	// site 登录站点（cn/intl/workbuddy，对齐官方域表）。决定 poll 用哪套端点：
+	// 国际域 codebuddy.ai 与 workbuddy.ai 同后端不同主机，混用会把请求打到非签发域。
+	// 空 = 老会话/未指定，按 cn 处理（siteOrDefault 归一）。
+	site string
 	// processing 该 state 正在落盘（含签到/余额校验等副作用）。前端每 3s 轮询，而成功
 	// 分支的副作用可能耗时数秒：没有这个闸门，第二个并发 poll 会把整段流程再跑一遍。
 	processing bool

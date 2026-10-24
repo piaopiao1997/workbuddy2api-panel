@@ -1375,10 +1375,12 @@ document.querySelectorAll('#addTabs .tab').forEach(b => {
   b.onclick = () => switchAddTab(b.dataset.tab);
 });
 function startAddLogin() {
-  const realm = (document.querySelector('input[name="addRealm"]:checked') || {}).value || 'cn';
+  // 站点（官方域表 cn/intl/workbuddy）：面板只传 site，realm 由后端按站点表决定，
+  // 避免前端自己维护一份域表。
+  const site = (document.querySelector('input[name="addSite"]:checked') || {}).value || 'cn';
   $('btnStartLogin').disabled = true;
   $('addLoad').hidden = false; $('addErr').hidden = true;
-  api('login/start', { method: 'POST', body: JSON.stringify({ realm }) }).then(r => {
+  api('login/start', { method: 'POST', body: JSON.stringify({ site }) }).then(r => {
     loginState = r.state;
     $('addUrl').textContent = r.url;
     $('addPick').hidden = true; // 选域锁定（会话已按该域发起）
@@ -1404,6 +1406,15 @@ async function pollLogin() {
   try {
     const r = await api('login/poll?state=' + encodeURIComponent(loginState));
     pollFails = 0;
+    if (r.fatal) {
+      // 上游许可类终态（席位满 / 许可证过期 / 试用到期）：重试无意义，直接把上游
+      // 原话给用户（官方 SignLicenseError 行为）。
+      stopPoll();
+      $('addReady').hidden = true;
+      $('addErr').hidden = false;
+      $('addErr').textContent = r.message || '登录被上游拒绝';
+      return;
+    }
     if (r.done) {
       stopPoll();
       $('addReady').hidden = true;

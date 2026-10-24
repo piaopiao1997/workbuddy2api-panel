@@ -38,7 +38,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 
 | 能力 | 说明 |
 |---|---|
-| 🔑 **OAuth 一键登录** | `login.sh` 设备授权流程，自动落盘凭证并重启容器加载新账号 |
+| 🔑 **OAuth 一键登录** | `login.sh` / 面板设备授权流程，三站点可选（CN / 官方国际站 / 旧桌面端），自动落盘凭证并加载新账号 |
 | 🔄 **多账号池** | 快过期积分加权 + 成本分层 + 加权随机选号，Top-5 候选 + 防惊群 |
 | 🛡️ **熔断与冷却** | 429 软冷却 600s 起指数退避（封顶 `soft_rate_max`）、404 固定 60s 短冷却、402 硬冷却至次日 04:00、连续失败熔断、在途租约限流 |
 | 🧲 **会话粘性** | 同一会话（`conversation_id`）尽量绑定同一账号，TTL 滚动续期，失败自动解绑，可镜像 Redis 防重启丢失 |
@@ -314,11 +314,26 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit ./cmd/credit
 **方式 B：命令行脚本（仅 Linux / macOS，依赖 bash + python3）**
 
 ```bash
-./login.sh
+./login.sh                    # 国内站（copilot.tencent.com）
+./login.sh --site=intl        # 官方国际站（www.codebuddy.ai）
+./login.sh --site=workbuddy   # 旧桌面端国际版（www.workbuddy.ai）
+./login.sh --realm=global     # 兼容旧写法，等价 --site=workbuddy
 # 按提示在浏览器打开授权链接 → 回到终端确认 → 凭证落盘 auths/workbuddy-<uid>.json
 ```
 
-`login.sh` 内置授权 URL 获取 + 浏览器登录 + token 轮询 + 首次签到 + 凭证落盘 + 容器重启，全程无 PKCE（state 由服务端签发）。账号池在容器启动时用 `auths/` 目录自动对齐，新增凭证文件即自动发现。
+`login.sh` 内置授权 URL 获取 + 浏览器登录 + token 轮询 + 首次签到（仅 CN）+ 凭证落盘 + 容器重启，全程无 PKCE（state 由服务端签发）。账号池在容器启动时用 `auths/` 目录自动对齐，新增凭证文件即自动发现。
+
+**站点口径对齐官方 CLI 2.174.0**（`internal/loginsite` 是唯一来源，面板与 `login.sh` 共用）：
+
+| 站点 | 上游 API | Origin | 说明 |
+|---|---|---|---|
+| `cn` | `copilot.tencent.com` | `www.codebuddy.cn` | 国内站（缺省） |
+| `intl` | `www.codebuddy.ai` | `www.codebuddy.ai` | 官方国际站（CLI `product.json` 的 externalDomain），新账号选这个 |
+| `workbuddy` | `www.workbuddy.ai` | `www.workbuddy.ai` | 旧桌面端国际版，仅已注册在该域的老账号 |
+
+两个国际站实测**同一后端**（同一 token 打两域，`/billing/meter/get-user-resource-summary` 返回相同的 PackageCode 与容量），差别只在主机名与 WAF 口径。授权链接会自动补官方的 `version` 参数；`platform=workbuddy` 域在部署侧提供 `CODEBUDDY_LOGIN_DEVICE_NONCE` 时再补 `ww_device_nonce`（本仓无桌面端设备指纹 SDK，不伪造）。
+
+登录轮询按官方码表分类：`11217`（RetryFetchToken）/ `12151`（RetryFetchAccount）继续轮询，`12005`（席位满）/ `11212`（许可证过期）/ `11216`（试用到期）**立即终态报错**并透出上游 msg，不再空转到会话 TTL。
 
 > Windows 用户请用方式 A（或 WSL）；`login.sh` 需要 python3。
 
@@ -909,6 +924,7 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 - **内容**：明文 `accessToken` / `refreshToken` + 账号元信息（`account.uid` / `enterpriseId` / `nickname`）
 - **权限**：容器内以 `app` 用户（uid 10001）运行；token 刷新由 `SaveAtomic` 以 `0600` 原子写回（tmp + rename）；`login.sh` 首次落盘遵循登录 umask，建议手动 `chmod 600 auths/*.json`
 - **切勿提交 git**：`.gitignore` 已排除 `auths/`、`data/`、`backups/`、`config.json`、`*.key`、`*.pem`、`*.env`、`docs/` 及除 README 外的全部 `*.md` 工作文档
+- **可从官方 CLI 直接导入**：官方 CodeBuddy CLI 的登录态在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\Tencent-Cloud.coding-copilot.info`（Linux/macOS 对应 `~/.local/share`、`~/Library/Application Support`），字段与本仓 auth 文件同构（`account.uid/nickname` + `auth.accessToken/refreshToken/domain`），复制成 `auths/workbuddy-<uid>.json` 即可入池，无需重走 SSO。**两处差异已由解析层吸收**：① 官方 `expiresAt` 是**毫秒**（本仓内部按秒，`Parse` 自动归一，否则到期时间会落到公元 58800 年 → token 永不刷新 → 一个月后静默全 401）；② 官方国际站 domain 是 `www.codebuddy.ai`（本仓已按 `*.codebuddy.ai` 判 global，并按 domain 选上游主机）
 
 ### 2. 网络暴露与日志敏感度
 

@@ -1422,11 +1422,12 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div id="addTabLogin" class="tab-panel">
         <div id="addPick">
           <div class="realm-row">
-            <span class="hint" style="font-size:12px">版本：</span>
-            <label class="realm-opt"><input type="radio" name="addRealm" value="cn" checked> 国内版（CN）</label>
-            <label class="realm-opt"><input type="radio" name="addRealm" value="global"> 国际版（Global）</label>
+            <span class="hint" style="font-size:12px">站点：</span>
+            <label class="realm-opt"><input type="radio" name="addSite" value="cn" checked> 国内版（CN）</label>
+            <label class="realm-opt"><input type="radio" name="addSite" value="intl"> 国际版（Global）</label>
+            <label class="realm-opt"><input type="radio" name="addSite" value="workbuddy"> 国际版（旧桌面端）</label>
           </div>
-          <div class="hint" style="font-size:12px;margin-top:2px">国际版登录后，网关自动完成注册地区、激活与试用额度领取，全程无需手动操作。</div>
+          <div class="hint" style="font-size:12px;margin-top:2px">国际版登录后，网关自动完成注册地区、激活与试用额度领取，全程无需手动操作。「旧桌面端」仅用于已注册在 workbuddy.ai 的老账号，新账号请选国际版。</div>
         </div>
         <div id="addLoad" class="state" hidden><span class="dots">正在获取授权链接</span></div>
         <div id="addReady" hidden>
