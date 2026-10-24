@@ -1427,8 +1427,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 只能手动催一句。此前网关侧完全无痕（这是定位困难的主因），这里只记日志
 			// 并非把流改成错误：模型「判断不需要工具、直接回答」是合法行为，强行改写成
 			// 错误会让这类正常回合反复重试、每次都真实计费。
+			//
+			// 级别是 INFO 不是 WARN：这是合法收尾，不是故障。记 WARN 会进「错误汇总」
+			// 的兜底桶（其他（未归类）），把正常回合当成错误看待。
 			if len(declaredTools) > 0 && !stats.SawToolCalls() && stats.FinishReason() == "stop" {
-				log.Printf("WARN: [server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (silent stop; client may treat the turn as complete)",
+				log.Printf("INFO: [server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (本轮无工具调用，正常收尾)",
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, len(declaredTools))
 			}
 			st.ttfb = stats.TTFB()
