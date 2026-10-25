@@ -529,6 +529,7 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 	type fileItem struct {
 		path  string
 		mtime time.Time
+		day   time.Time // 文件名日期零点；零值 = 解析不出（保守参与读取，不参与短路）
 	}
 	files := make([]fileItem, 0, len(entries))
 	for _, entry := range entries {
@@ -540,16 +541,42 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 		if err != nil {
 			continue
 		}
-		files = append(files, fileItem{path: filepath.Join(w.cfg.Dir, name), mtime: info.ModTime()})
+		files = append(files, fileItem{path: filepath.Join(w.cfg.Dir, name), mtime: info.ModTime(), day: archiveFileDay(name)})
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].mtime.Before(files[j].mtime) })
+	// 新日期在前（同日内 mtime 新的在前）：配合下方「集满即停」，面板日志视图的
+	// 「最近 N 条」不必再解析整个归档（上限 100MB，且每 5s 轮询放大一次）。
+	sort.Slice(files, func(i, j int) bool {
+		di, dj := files[i].day, files[j].day
+		if !di.Equal(dj) {
+			if di.IsZero() {
+				return false
+			}
+			if dj.IsZero() {
+				return true
+			}
+			return di.After(dj)
+		}
+		return files[i].mtime.After(files[j].mtime)
+	})
 	var out []Event
+	maxDay := time.Time{}
 	for _, file := range files {
+		if archiveWindowSkips(file.day, filter) {
+			continue
+		}
+		// 已集满 limit 且当前文件属于更早的日期：它的事件全部早于已收集的每个
+		// 事件（按天归档保证），不可能进入「最近 limit 条」，后续文件只会更旧。
+		if len(out) >= limit && !file.day.IsZero() && !maxDay.IsZero() && file.day.Before(maxDay) {
+			break
+		}
 		rows, err := readFile(file.path, filter)
 		if err != nil {
 			return out, err
 		}
 		out = append(out, rows...)
+		if file.day.After(maxDay) {
+			maxDay = file.day
+		}
 	}
 	// 按事件时间排序，而不是依赖文件 mtime 顺序：分片文件在同一毫秒内落盘时
 	// mtime 可能完全相同（粗粒度时间戳的文件系统），文件顺序随机 → 「最近 N 条」取错样本。
@@ -561,6 +588,36 @@ func (w *archiveWriter) read(limit int, filter Filter) ([]Event, error) {
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
+}
+
+// archiveFileDay 从 requests-YYYY-MM-DD*.jsonl 文件名提取日期零点（本地时区，
+// 与归档写入的 day 同口径）；解析不出返回零值——保守处理：照常读取、不参与
+// 窗口短路与提前停止。
+func archiveFileDay(name string) time.Time {
+	s := strings.TrimSuffix(strings.TrimPrefix(name, "requests-"), ".jsonl")
+	if len(s) < 10 {
+		return time.Time{}
+	}
+	day, err := time.ParseInLocation("2006-01-02", s[:10], time.Local)
+	if err != nil {
+		return time.Time{}
+	}
+	return day
+}
+
+// archiveWindowSkips 文件级时间窗短路：归档按天分片（事件全部落在
+// [day, day+1) 内），与 Filter.From/To 无交集的文件整档跳过，不再读入解析。
+func archiveWindowSkips(day time.Time, filter Filter) bool {
+	if day.IsZero() {
+		return false
+	}
+	if !filter.To.IsZero() && filter.To.Before(day) {
+		return true
+	}
+	if !filter.From.IsZero() && !filter.From.Before(day.AddDate(0, 0, 1)) {
+		return true
+	}
+	return false
 }
 
 func readFile(path string, filter Filter) ([]Event, error) {
