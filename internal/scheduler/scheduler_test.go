@@ -458,13 +458,53 @@ func TestRunKeepaliveSessionDeadDisables(t *testing.T) {
 	}
 }
 
+// TestRunKeepalive12153WithLiveAccessToken 上游吊销了 offline session（12153）但
+// AccessToken 尚未过期时，账号的对话侧仍完全可用（Bearer 只看 AT）：这种情况既不能
+// 计数也不能禁用，否则 3 次阈值会在 AT 到期前先杀号，白丢配额（issue #83 实测：
+// 326 个号里 71 个只死 refresh、AT 到 2026-11-19/20 才过期）。
+func TestRunKeepalive12153WithLiveAccessToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"code":12153,"msg":"Session doesn't have required client"}`))
+	}))
+	defer srv.Close()
+
+	p := pool.New("")
+	a := &auth.Auth{
+		UID: "u1", AccessToken: "old", RefreshToken: "rt",
+		ExpiresAt: time.Now().Add(20 * 24 * time.Hour).Unix(),
+	}
+	p.Add(a)
+
+	up := &upstream.Client{
+		HTTP:          srv.Client(),
+		ChatBaseCN:    srv.URL,
+		BillingBaseCN: srv.URL,
+	}
+	s := New(Config{Pool: p, Upstream: up})
+	// 跑满 4 轮（> 阈值 3）也不能禁用。
+	for i := 0; i < 4; i++ {
+		s.RunKeepaliveNow()
+	}
+	st, _ := p.Status("u1")
+	if st.Disabled {
+		t.Fatalf("AT 未过期时 12153 不应禁用: %+v", st)
+	}
+	if st.SessionDeadFails != 0 {
+		t.Errorf("session dead 计数=%d want 0（AT 未过期不累计）", st.SessionDeadFails)
+	}
+}
+
 // TestRunKeepaliveSessionDeadResetBySuccess 两次 12153 后刷新成功 → 计数清零，
 // 再来的 12153 从第 1 次重新计（不会因历史失败被继续追杀）。
 func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 	var fails atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if fails.Add(1) == 3 { // 第 3 次（本次调度循环的第二轮）刷新成功
-			w.Write([]byte(`{"code":0,"data":{"accessToken":"new","expiresIn":3600}}`))
+			// 刻意不带 expiresIn：applyRefresh 只在 expiresIn > 0 时改写 ExpiresAt，
+			// 于是 AccessToken 保持「已过期」——本用例要测的是**计数清零**语义，
+			// 而 AccessToken 未过期的 12153 已被豁免计数（见下一个用例）。
+			w.Write([]byte(`{"code":0,"data":{"accessToken":"new"}}`))
 			return
 		}
 		w.WriteHeader(401)

@@ -788,6 +788,8 @@ func (s *Scheduler) checkActivityStreak(a *auth.Auth) bool {
 // 12153 禁用走 Pool.NoteSessionDead 的**连续计数**语义：一次刷新失败不再立即杀号，
 // 连续 sessionDeadThreshold 次（3 次）才禁用（P0-1：13 个 disabled 号全是历史误判）。
 // 刷新成功 → ClearSessionDead 清计数（错误判定的账号有复活路径）。
+// 例外：AccessToken 尚未过期的 12153 不计入该阈值——refresh 死了但号还能用，
+// 见 runKeepalive 内的注释（issue #83）。
 func (s *Scheduler) RunKeepaliveNow() {
 	s.runKeepalive(context.Background(), false)
 }
@@ -811,7 +813,16 @@ func (s *Scheduler) runKeepalive(ctx context.Context, spread bool) {
 			log.Printf("WARN: keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 			var ue *upstream.Error
 			if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && !st.Disabled {
-				if s.cfg.Pool.NoteSessionDead(st.UID) {
+				// 12153 只证明 refresh 链断了，不证明这个号现在不能用：上游吊销 offline
+				// session 之后 AccessToken 仍在其有效期内，chat 侧 Bearer 鉴权照常通过
+				// （issue #83 实测 326 个号：255 个可刷新，71 个仅 refresh 失效、AT 到
+				// 2026-11-19/20 才过期，期间对话完全正常）。
+				// 这种情况计入 session dead 会让 3 次阈值在 AT 到期前先杀号，白丢配额，
+				// 故只在 AT 也已不可用时才累计禁用阈值，未过期只告警不计数。
+				if exp := a.ExpiresAtValue(); exp > 0 && time.Now().Unix() < exp {
+					log.Printf("WARN: keepalive %s: 12153 但 AccessToken 未过期（%s 到期）— 不计 session dead，服务到 AT 自然过期",
+						logfmt.Label(st.UID, st.Nickname), time.Unix(exp, 0).In(cst.Loc).Format("2006-01-02"))
+				} else if s.cfg.Pool.NoteSessionDead(st.UID) {
 					log.Printf("WARN: keepalive %s: 连续 %d 次 12153 session dead — 禁用", logfmt.Label(st.UID, st.Nickname), pool.SessionDeadThreshold())
 				}
 			}

@@ -92,6 +92,18 @@ func (a *Auth) RefreshTokenValue() string {
 	return a.RefreshToken
 }
 
+// ExpiresAtValue 加锁读取 AccessToken 的过期时间（unix 秒，<=0 表示未知）。
+// 同 AccessTokenValue：RefreshToken 在锁内改写 ExpiresAt，锁外直读构成数据竞争。
+// 调度器用它判定「refresh 已死但 AT 仍可用」的账号（issue #83）。
+func (a *Auth) ExpiresAtValue() int64 {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ExpiresAt
+}
+
 // globalEnabled 全局开关：global realm 是否路由（D5 双保险）。
 // 默认开启（与 config global.enabled 缺省 true 一致）：Realm() 正常按显式 realm/
 // domain 判定 global/cn。显式 SetGlobalEnabled(false)（config "enabled": false）关闭
