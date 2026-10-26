@@ -554,11 +554,11 @@ func TestGlobalBaseByDomain(t *testing.T) {
 		{name: "global 非国际域回落默认", realm: "global", domain: "example.com",
 			wantChat: "https://www.codebuddy.ai", wantBilling: "https://www.codebuddy.ai", wantWeb: "https://www.codebuddy.ai"},
 		// 非 global 账号恒走 CN 三域（realm 决定域，domain 只在 global 内选主机）。
-		// CN 三个 base 本来就不同源：chat=copilot、billing=codebuddy.cn、web=workbuddy.cn。
+		// CN 三个 base 本来就不同源：chat/web=workbuddy.cn、billing=codebuddy.cn。
 		{name: "空 domain 非 global 走 CN", domain: "",
-			wantChat: "https://copilot.tencent.com", wantBilling: "https://www.codebuddy.cn", wantWeb: "https://www.workbuddy.cn"},
+			wantChat: "https://www.workbuddy.cn", wantBilling: "https://www.codebuddy.cn", wantWeb: "https://www.workbuddy.cn"},
 		{name: "非国际域非 global 走 CN", domain: "example.com",
-			wantChat: "https://copilot.tencent.com", wantBilling: "https://www.codebuddy.cn", wantWeb: "https://www.workbuddy.cn"},
+			wantChat: "https://www.workbuddy.cn", wantBilling: "https://www.codebuddy.cn", wantWeb: "https://www.workbuddy.cn"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

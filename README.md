@@ -327,7 +327,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o credit ./cmd/credit
 
 | 站点 | 上游 API | Origin | 说明 |
 |---|---|---|---|
-| `cn` | `copilot.tencent.com` | `www.codebuddy.cn` | 国内站（缺省） |
+| `cn` | `copilot.tencent.com` | `www.codebuddy.cn` | 国内站（缺省）；登录走 CLI 口径，与对话的主域不同源，见下 |
 | `intl` | `www.codebuddy.ai` | `www.codebuddy.ai` | 官方国际站（CLI `product.json` 的 externalDomain），新账号选这个 |
 | `workbuddy` | `www.workbuddy.ai` | `www.workbuddy.ai` | 旧桌面端国际版，仅已注册在该域的老账号 |
 
@@ -800,8 +800,9 @@ http://127.0.0.1:7863/panel/
 
 上游接口均为 CodeBuddy 官方 CLI / 插件使用的**非公开 / 逆向接口**，未见公开 API 文档；路径及 Host 以代码内常量为准（见文末出处表）。两类 base：
 
-- **`copilot.tencent.com`**：聊天补全（SSE）、token 刷新、OAuth、模型列表、growth 域（旅行 / streak）
-- **`www.codebuddy.cn`**：每日签到、余额查询、活跃上报
+- **`www.workbuddy.cn`**：聊天补全（SSE）、模型目录、growth 域（旅行 / streak）——官方桌面端 `product.json` 的 endpoint；`copilot.tencent.com` 是它 `NetworkFailover` 里的备选入口，可用 `cn.chat_base` 回填
+- **`www.codebuddy.cn`**：每日签到、余额查询、活跃上报、小程序上报（CLI 指纹域，任务计分依赖）
+- **`copilot.tencent.com`**：OAuth 与 token 刷新（官方 CLI 口径，`internal/loginsite` 单独维护）
 
 | 相对路径（绝对路径见出处表） | 方法 | 用途 |
 |---|---|---|
