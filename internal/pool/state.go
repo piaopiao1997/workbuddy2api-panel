@@ -51,6 +51,7 @@ func (p *Pool) NoteSessionDeadWith(uid, reason string) bool {
 	}
 	e.sessionDeadFails++
 	if e.sessionDeadFails < sessionDeadThreshold {
+		p.dirty.Store(true) // 中间计数也落盘：重启丢进度会让「离禁用还差几次」重新从零学
 		return false
 	}
 	e.sessionDeadFails = 0
@@ -68,6 +69,7 @@ func (p *Pool) NoteSessionAlive(uid string) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok && e.sessionDeadFails != 0 {
 		e.sessionDeadFails = 0
+		p.dirty.Store(true) // 清零点落盘：不置脏时重启会复活旧计数，误杀刚自证存活的账号
 	}
 }
 
@@ -76,8 +78,9 @@ func (p *Pool) NoteSessionAlive(uid string) {
 func (p *Pool) ClearSessionDead(uid string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if e, ok := p.byUID[uid]; ok {
+	if e, ok := p.byUID[uid]; ok && e.sessionDeadFails != 0 {
 		e.sessionDeadFails = 0
+		p.dirty.Store(true) // 同上：清零不落盘的话，重启后旧计数会把下次失败直接推到阈值
 	}
 }
 
