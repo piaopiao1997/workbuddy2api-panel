@@ -100,6 +100,18 @@ type Panel struct {
 	taskMu    sync.Mutex
 	taskLocks map[string]*sync.Mutex
 
+	// batchRunning 手动全量运维接口（签到/旅行/活跃/保活/余额）共用的防重入闸门：
+	// 这些动作都是逐号打上游，并发跑两轮 = 每号至少翻倍上游请求，正是批间节流
+	// 要避免的场景。TryLock 语义，见 tryStartBatch。
+	batchRunning atomic.Bool
+
+	// modelsMu/modelsCache* /panel/api/models 的短 TTL 结果缓存：该接口是
+	// 「CN 目录直连 + global 目录 + 繁忙度」的实时上游聚合，前端自己都按
+	// 「很贵」在节流——服务端再兜一层，挡住异常前端循环与外部脚本。
+	modelsMu      sync.Mutex
+	modelsCacheAt time.Time
+	modelsCache   *modelsCacheEntry
+
 	// 任务中心执行队列（taskcenter.go）。
 	queueOnce sync.Once
 	q         *queueState
@@ -151,6 +163,17 @@ func (p *Panel) unlockAccount(uid string) {
 // loginTTL 授权 URL 的最长有效期：超时的 state 直接回收，
 // 防止"开了添加账号弹窗就走开"的会话永久滞留。
 const loginTTL = 15 * time.Minute
+
+// modelsCacheTTL 面板模型列表的结果缓存时长（测试可注入短值）。只缓存「零
+// fetchErr」的完整成功响应；部分失败的结果每次照常重探，直到拿到干净目录。
+var modelsCacheTTL = 60 * time.Second
+
+// modelsCacheEntry 一次成功聚合的结果（global_source 一并冻结——它描述的就是
+// 这份目录的来源，目录换源缓存必须跟着失效）。
+type modelsCacheEntry struct {
+	models       []map[string]any
+	globalSource string
+}
 
 // loginSession 进行中的 OAuth 会话：创建时刻 + realm（cn/global，用于落盘与端点切换）。
 type loginSession struct {
@@ -530,8 +553,17 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 
 	// refresh=1：强制重探 global 目录（issue #216 现象 3）。此前按钮只是重读 1h 缓存，
 	// 上游目录变了也纹丝不动。CN 侧本来就是每请求直连上游（无缓存），无需处理。
-	if r.URL.Query().Get("refresh") == "1" {
+	refresh := r.URL.Query().Get("refresh") == "1"
+	if refresh {
 		p.cfg.Upstream.InvalidateGlobalModelsCache()
+	} else if entry := p.loadModelsCache(); entry != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":            true,
+			"models":        entry.models,
+			"global_source": entry.globalSource,
+			"cached":        true,
+		})
+		return
 	}
 
 	// CN 域：有可用 CN 账号才查（此前无条件 Pool.Pick()+FetchModels——选中 global
@@ -678,14 +710,36 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "没有可用账号：请先在面板添加账号再查询")
 		return
 	}
+	globalSource := p.cfg.Upstream.GlobalCatalogSource()
+	if len(fetchErrs) == 0 {
+		p.storeModelsCache(&modelsCacheEntry{models: out, globalSource: globalSource})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
 		"models": out,
 		// global_source global 目录来源（v3-desktop / v3-union / enterprise）。
 		// 前端据此提示「拿到的是回落/降级目录」——issue #216 里用户只看到「少了 11 个模型」，
 		// 完全不知道已经降级到企业端点（那份目录只有 18 条、hy4-preview 的倍率还是旧值）。
-		"global_source": p.cfg.Upstream.GlobalCatalogSource(),
+		"global_source": globalSource,
 	})
+}
+
+// loadModelsCache 返回未过期的聚合结果；TTL 过期或从未成功过返回 nil。
+func (p *Panel) loadModelsCache() *modelsCacheEntry {
+	p.modelsMu.Lock()
+	defer p.modelsMu.Unlock()
+	if p.modelsCache == nil || time.Since(p.modelsCacheAt) >= modelsCacheTTL {
+		return nil
+	}
+	return p.modelsCache
+}
+
+// storeModelsCache 记录一次成功聚合（refresh=1 的强制重探同样刷新缓存）。
+func (p *Panel) storeModelsCache(entry *modelsCacheEntry) {
+	p.modelsMu.Lock()
+	defer p.modelsMu.Unlock()
+	p.modelsCache = entry
+	p.modelsCacheAt = time.Now()
 }
 
 // panelModelEntry 构造单个模型条目（两域共用）：id 带 realm 前缀（调用值即显示值），
@@ -965,46 +1019,89 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 // 批量任务
 // ---------------------------------------------------------------------------
 
+// tryStartBatch 手动全量运维接口的防重入闸门：五个动作（签到/旅行/活跃/保活/
+// 余额）共用一把——它们都是逐号打上游，并发跑两轮 = 每号至少翻倍上游请求，正是
+// 批间节流要避免的场景（与任务中心 tryLockAccount 的 409 语义一致）。
+func (p *Panel) tryStartBatch(w http.ResponseWriter, action string) bool {
+	if !p.batchRunning.CompareAndSwap(false, true) {
+		writeErr(w, http.StatusConflict, "已有全量任务在执行中，请等待本轮完成后再触发")
+		log.Printf("panel: %s 重复触发被拒绝（已有全量任务在跑）", action)
+		return false
+	}
+	return true
+}
+
+// finishBatch 归还防重入闸门。
+func (p *Panel) finishBatch() { p.batchRunning.Store(false) }
+
 // checkinAll 手动触发全量签到（异步执行，进度看日志区/账号状态变化）。
 func (p *Panel) checkinAll(w http.ResponseWriter, r *http.Request) {
+	if !p.tryStartBatch(w, "全量签到") {
+		return
+	}
 	if p.cfg.Scheduler == nil {
+		p.finishBatch()
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
-	go p.cfg.Scheduler.RunCheckinNow()
+	go func() {
+		defer p.finishBatch()
+		p.cfg.Scheduler.RunCheckinNow()
+	}()
 	log.Printf("panel: 手动全量签到已触发（含猫猫旅行）")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
 // travelAll 手动触发全量猫猫旅行巡检（异步执行）。
 func (p *Panel) travelAll(w http.ResponseWriter, r *http.Request) {
+	if !p.tryStartBatch(w, "全量旅行巡检") {
+		return
+	}
 	if p.cfg.Scheduler == nil {
+		p.finishBatch()
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
-	go p.cfg.Scheduler.RunTravelNow()
+	go func() {
+		defer p.finishBatch()
+		p.cfg.Scheduler.RunTravelNow()
+	}()
 	log.Printf("panel: 手动全量旅行巡检已触发")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
 // activityAll 手动触发全量活跃上报（异步执行；点亮连登 + 解锁领养前置）。
 func (p *Panel) activityAll(w http.ResponseWriter, r *http.Request) {
+	if !p.tryStartBatch(w, "全量活跃上报") {
+		return
+	}
 	if p.cfg.Scheduler == nil {
+		p.finishBatch()
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
-	go p.cfg.Scheduler.RunActivityNow()
+	go func() {
+		defer p.finishBatch()
+		p.cfg.Scheduler.RunActivityNow()
+	}()
 	log.Printf("panel: 手动全量活跃上报已触发")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
 
 // keepaliveAll 手动触发全量 token 保活（异步执行）。
 func (p *Panel) keepaliveAll(w http.ResponseWriter, r *http.Request) {
+	if !p.tryStartBatch(w, "全量保活") {
+		return
+	}
 	if p.cfg.Scheduler == nil {
+		p.finishBatch()
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
-	go p.cfg.Scheduler.RunKeepaliveNow()
+	go func() {
+		defer p.finishBatch()
+		p.cfg.Scheduler.RunKeepaliveNow()
+	}()
 	log.Printf("panel: 手动全量保活已触发")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "started": true})
 }
@@ -1013,6 +1110,10 @@ func (p *Panel) keepaliveAll(w http.ResponseWriter, r *http.Request) {
 // 完成后返回——面板紧接着拉 overview 即是最新值。账号量小（个位数），
 // 同步等待（上限受短 RPC 超时约束）比"触发后盲刷"体验更确定。
 func (p *Panel) balanceAll(w http.ResponseWriter, r *http.Request) {
+	if !p.tryStartBatch(w, "全量余额刷新") {
+		return
+	}
+	defer p.finishBatch()
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
